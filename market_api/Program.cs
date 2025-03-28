@@ -10,7 +10,7 @@ builder.Services.AddCors(options =>
         builder.WithOrigins("http://localhost:3001", "https://localhost:3001")  // Разрешаем оба протокола
                .AllowAnyMethod()  // Разрешаем все методы (GET, POST и т.д.)
                .AllowAnyHeader()  // Разрешаем все заголовки
-               .AllowCredentials()); // Разрешаем использование кук и аутентификацию
+               .AllowCredentials()); 
 });
 
 
