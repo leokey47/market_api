@@ -1,39 +1,41 @@
+using Microsoft.EntityFrameworkCore;
+using market_api.Data;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Подключение к PostgreSQL
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Добавление контроллеров
 builder.Services.AddControllers();
 
-// Настройка CORS для всех нужных портов
+// Настройка CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", builder =>
-        builder.WithOrigins("http://localhost:3001", "https://localhost:3001")  // Разрешаем оба протокола
-               .AllowAnyMethod()  // Разрешаем все методы (GET, POST и т.д.)
-               .AllowAnyHeader()  // Разрешаем все заголовки
-               .AllowCredentials()); 
+    options.AddPolicy("AllowReactApp", policy =>
+        policy.SetIsOriginAllowed(origin => new Uri(origin).Host == "localhost")
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials());
 });
 
-
-
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// Добавление Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Конфигурация middleware
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// Включаем CORS
-app.UseCors("AllowAll");
-
+app.UseCors("AllowReactApp");
 app.UseHttpsRedirection();
 app.UseAuthorization();
-
 app.MapControllers();
 
 app.Run();
