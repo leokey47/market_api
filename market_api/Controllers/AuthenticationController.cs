@@ -29,6 +29,7 @@ public class AuthenticationController : ControllerBase
         }
 
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Username == model.Username);
+
         if (user == null)
         {
             return Unauthorized(new { message = "Пользователь не найден" });
@@ -41,6 +42,7 @@ public class AuthenticationController : ControllerBase
 
         var token = GenerateJwtToken(user);
         return Ok(new { token });
+
     }
 
     [HttpPost("register")]

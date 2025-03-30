@@ -6,5 +6,5 @@
     public string PasswordHash { get; set; }
     public string Role { get; set; }  // Роль пользователя
     public DateTime CreatedAt { get; set; }  // Дата создания
-    public string ProfileImageUrl { get; set; }  // Ссылка на изображение профиля
+    public string? ProfileImageUrl { get; set; }
 }
