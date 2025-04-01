@@ -8,6 +8,8 @@ using System;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using market_api.Data;
 using market_api.Models;
+using market_api.Repositories;
+using market_api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +45,8 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IUserService, UserService>();
 
 // Add CORS policy
 builder.Services.AddCors(options =>
