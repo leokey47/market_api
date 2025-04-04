@@ -10,6 +10,11 @@ using market_api.Data;
 using market_api.Models;
 using market_api.Repositories;
 using market_api.Services;
+using market_api.Controllers;
+using CloudinaryDotNet;
+using Microsoft.Extensions.Options;
+using Microsoft.OpenApi.Models;
+using System.Collections.Generic;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,25 +24,37 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+
+// Configure Swagger for OpenAPI 3.0
 builder.Services.AddSwaggerGen(options =>
 {
-    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    // OpenAPI v3 definition
+    options.SwaggerDoc("v1", new OpenApiInfo
     {
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Title = "Market API",
+        Version = "v1",
+        Description = "A simple API for managing market operations",
+    });
+
+    // Add security definition for JWT authentication
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        In = ParameterLocation.Header,
         Description = "Please insert JWT with Bearer into field",
         Name = "Authorization",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = SecuritySchemeType.ApiKey,
         Scheme = "Bearer"
     });
 
-    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    // Define the security requirement
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
-            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            new OpenApiSecurityScheme
             {
-                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                Reference = new OpenApiReference
                 {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Type = ReferenceType.SecurityScheme,
                     Id = "Bearer"
                 }
             },
@@ -45,6 +62,7 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
+
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IUserService, UserService>();
 
@@ -75,6 +93,15 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("thisisaverysecureandlongenoughkey123456"))
     };
 });
+
+var cloudinarySettings = builder.Configuration.GetSection("Cloudinary").Get<CloudinarySettings>();
+var cloudinary = new Cloudinary(new Account(
+    cloudinarySettings.CloudName,
+    cloudinarySettings.ApiKey,
+    cloudinarySettings.ApiSecret
+));
+
+builder.Services.AddSingleton(cloudinary);
 
 // Add Authorization
 builder.Services.AddAuthorization();
@@ -108,8 +135,47 @@ using (var scope = app.Services.CreateScope())
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    // Configure custom Swagger JSON with OpenAPI version 3.0
+    app.UseSwagger(c =>
+    {
+        c.SerializeAsV2 = false;
+
+        // Inject the version directly into the generated JSON
+        c.PreSerializeFilters.Add((swaggerDoc, httpReq) =>
+        {
+            // Add the OpenAPI version field to the root document
+            var dict = new Dictionary<string, object>
+            {
+                ["openapi"] = "3.0.0"
+            };
+
+            // Add each existing property
+            foreach (var prop in swaggerDoc.GetType().GetProperties())
+            {
+                var value = prop.GetValue(swaggerDoc);
+                if (value != null)
+                {
+                    dict[prop.Name.ToLowerInvariant()] = value;
+                }
+            }
+
+            // Replace the document with our modified version
+            // This is a hacky workaround since we can't directly set "openapi" property
+            foreach (var prop in swaggerDoc.GetType().GetProperties())
+            {
+                if (prop.CanWrite && dict.ContainsKey(prop.Name.ToLowerInvariant()))
+                {
+                    prop.SetValue(swaggerDoc, dict[prop.Name.ToLowerInvariant()]);
+                }
+            }
+        });
+    });
+
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Market API v1");
+        c.RoutePrefix = string.Empty;  // This will make Swagger UI available at the root of the application.
+    });
 }
 
 app.UseHttpsRedirection();

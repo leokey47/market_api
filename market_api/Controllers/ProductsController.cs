@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using market_api.Models;
-using market_api.Data;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
+using market_api.Data;
+using market_api.Models;
+using Microsoft.AspNetCore.Authorization;
 
 namespace market_api.Controllers
 {
@@ -23,8 +23,7 @@ namespace market_api.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Product>>> GetProducts()
         {
-            var products = await _context.Products.ToListAsync();
-            return Ok(products);
+            return await _context.Products.ToListAsync();
         }
 
         // GET: api/Product/5
@@ -43,23 +42,56 @@ namespace market_api.Controllers
 
         // POST: api/Product
         [HttpPost]
-        public async Task<ActionResult<Product>> AddProduct(Product product)
+        [Authorize(Roles = "admin")]
+        public async Task<ActionResult<Product>> PostProduct(Product product)
         {
-            if (product == null)
+            if (string.IsNullOrEmpty(product.ImageUrl))
             {
-                return BadRequest("Product is null");
+                return BadRequest("Ошибка: изображение не загружено.");
             }
 
-            // Добавляем продукт в базу данных
+            Console.WriteLine($"Получен продукт: {product.Name}, {product.ImageUrl}"); // Проверяем imageUrl перед сохранением
+
             _context.Products.Add(product);
             await _context.SaveChangesAsync();
 
-            // Возвращаем добавленный продукт с его Id
             return CreatedAtAction(nameof(GetProduct), new { id = product.Id }, product);
+        }
+
+        // PUT: api/Product/5
+        [HttpPut("{id}")]
+        [Authorize(Roles = "admin")]
+        public async Task<IActionResult> PutProduct(int id, Product product)
+        {
+            if (id != product.Id)
+            {
+                return BadRequest();
+            }
+
+            _context.Entry(product).State = EntityState.Modified;
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                if (!ProductExists(id))
+                {
+                    return NotFound();
+                }
+                else
+                {
+                    throw;
+                }
+            }
+
+            return NoContent();
         }
 
         // DELETE: api/Product/5
         [HttpDelete("{id}")]
+        [Authorize(Roles = "admin")]
         public async Task<IActionResult> DeleteProduct(int id)
         {
             var product = await _context.Products.FindAsync(id);
@@ -72,6 +104,11 @@ namespace market_api.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        private bool ProductExists(int id)
+        {
+            return _context.Products.Any(e => e.Id == id);
         }
     }
 }
