@@ -5,5 +5,6 @@ namespace market_api.Repositories
     public interface IUserRepository
     {
         User? GetUserById(int id);
+        bool UpdateUser(User user);
     }
 }

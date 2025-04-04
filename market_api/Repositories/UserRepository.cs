@@ -17,5 +17,19 @@ namespace market_api.Repositories
         {
             return _context.Users.FirstOrDefault(u => u.UserId == id);
         }
+
+        public bool UpdateUser(User user)
+        {
+            try
+            {
+                _context.Users.Update(user);
+                _context.SaveChanges();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
     }
 }
