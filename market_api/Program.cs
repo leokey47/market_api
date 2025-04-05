@@ -71,9 +71,11 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", builder =>
     {
-        builder.AllowAnyOrigin()
+        builder.SetIsOriginAllowed(_ => true) // Разрешить все origins в dev среде
                .AllowAnyMethod()
-               .AllowAnyHeader();
+               .AllowAnyHeader()
+               .WithExposedHeaders("Content-Disposition", "Content-Length")
+               .AllowCredentials();
     });
 });
 
