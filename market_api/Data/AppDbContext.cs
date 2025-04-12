@@ -13,6 +13,8 @@ namespace market_api.Data
         public DbSet<Product> Products { get; set; }
         public DbSet<CartItem> CartItems { get; set; }
         public DbSet<WishlistItem> WishlistItems { get; set; }
+        public DbSet<ProductPhoto> ProductPhotos { get; set; }
+        public DbSet<ProductSpecification> ProductSpecifications { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -51,6 +53,20 @@ namespace market_api.Data
                 .HasOne(w => w.Product)
                 .WithMany()
                 .HasForeignKey(w => w.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure the Product photos relationship
+            modelBuilder.Entity<Product>()
+                .HasMany(p => p.Photos)
+                .WithOne(p => p.Product)
+                .HasForeignKey(p => p.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure the Product specifications relationship
+            modelBuilder.Entity<Product>()
+                .HasMany(p => p.Specifications)
+                .WithOne(p => p.Product)
+                .HasForeignKey(p => p.ProductId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }
