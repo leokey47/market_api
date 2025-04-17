@@ -25,6 +25,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
+// Register HttpClient for NOWPayments
+builder.Services.AddHttpClient("NOWPayments", client =>
+{
+    client.BaseAddress = new Uri("https://api.nowpayments.io/v1/");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+
 // Configure Swagger for OpenAPI 3.0
 builder.Services.AddSwaggerGen(options =>
 {
