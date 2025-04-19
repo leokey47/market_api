@@ -17,6 +17,7 @@ namespace market_api.Data
         public DbSet<ProductSpecification> ProductSpecifications { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
+        public DbSet<ExternalLogin> ExternalLogins { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -71,7 +72,7 @@ namespace market_api.Data
                 .HasForeignKey(p => p.ProductId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            
+            // Configure Order relationships
             modelBuilder.Entity<Order>()
                 .HasOne(o => o.User)
                 .WithMany()
@@ -89,6 +90,18 @@ namespace market_api.Data
                 .WithMany()
                 .HasForeignKey(oi => oi.ProductId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            // Configure ExternalLogin relationships
+            modelBuilder.Entity<ExternalLogin>()
+                .HasOne(el => el.User)
+                .WithMany()
+                .HasForeignKey(el => el.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Create unique index for provider + providerKey combination
+            modelBuilder.Entity<ExternalLogin>()
+                .HasIndex(el => new { el.Provider, el.ProviderKey })
+                .IsUnique();
         }
     }
 }
