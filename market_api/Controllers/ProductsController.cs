@@ -289,16 +289,67 @@ namespace market_api.Controllers
         [Authorize(Roles = "admin")]
         public async Task<IActionResult> DeleteProduct(int id)
         {
-            var product = await _context.Products.FindAsync(id);
-            if (product == null)
+            try
             {
-                return NotFound();
+                var product = await _context.Products
+                    .Include(p => p.Photos)
+                    .Include(p => p.Specifications)
+                    .FirstOrDefaultAsync(p => p.Id == id);
+
+                if (product == null)
+                {
+                    return NotFound();
+                }
+
+                // Find any order items that reference this product
+                var orderItems = await _context.OrderItems
+                    .Where(oi => oi.ProductId == id)
+                    .ToListAsync();
+
+                if (orderItems.Any())
+                {
+                    // Get all affected orders
+                    var orderIds = orderItems.Select(oi => oi.OrderId).Distinct().ToList();
+                    var orders = await _context.Orders
+                        .Where(o => orderIds.Contains(o.OrderId))
+                        .ToListAsync();
+
+                    // Remove order items first
+                    _context.OrderItems.RemoveRange(orderItems);
+                    await _context.SaveChangesAsync();
+
+                    // For each order, check if it has any remaining items
+                    foreach (var orderId in orderIds)
+                    {
+                        var remainingItems = await _context.OrderItems
+                            .Where(oi => oi.OrderId == orderId)
+                            .AnyAsync();
+
+                        // If order has no items left, delete the order
+                        if (!remainingItems)
+                        {
+                            var order = orders.FirstOrDefault(o => o.OrderId == orderId);
+                            if (order != null)
+                            {
+                                _context.Orders.Remove(order);
+                            }
+                        }
+                    }
+                    await _context.SaveChangesAsync();
+                }
+
+                // Now delete the product - photos and specifications will be deleted automatically
+                // due to cascade delete configuration
+                _context.Products.Remove(product);
+                await _context.SaveChangesAsync();
+
+                return NoContent();
             }
-
-            _context.Products.Remove(product);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                // Log the exception
+                return StatusCode(500, new { message = $"Internal error: {ex.Message}" });
+            }
         }
 
         private bool ProductExists(int id)
