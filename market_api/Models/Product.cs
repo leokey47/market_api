@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace market_api.Models
 {
@@ -23,6 +24,12 @@ namespace market_api.Models
         [Required]
         [MaxLength(100)]
         public string Category { get; set; }
+
+        // Для бизнес-аккаунтов
+        public int? BusinessOwnerId { get; set; }  // ID владельца бизнес-аккаунта
+
+        [ForeignKey("BusinessOwnerId")]
+        public User BusinessOwner { get; set; }
 
         // Navigation properties for related entities
         public virtual ICollection<ProductPhoto> Photos { get; set; } = new List<ProductPhoto>();

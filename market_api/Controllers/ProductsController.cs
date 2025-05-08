@@ -6,6 +6,7 @@ using System.Linq;
 using market_api.Data;
 using market_api.Models;
 using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 
 namespace market_api.Controllers
 {
@@ -88,7 +89,7 @@ namespace market_api.Controllers
 
         // POST: api/Product
         [HttpPost]
-        [Authorize(Roles = "admin")]
+        [Authorize] // Требует аутентификации (администраторы и бизнес-аккаунты)
         public async Task<ActionResult<object>> PostProduct([FromBody] ProductCreateDto productDto)
         {
             if (string.IsNullOrEmpty(productDto.ImageUrl))
@@ -98,33 +99,56 @@ namespace market_api.Controllers
 
             Console.WriteLine($"Получен продукт: {productDto.Name}, {productDto.ImageUrl}");
 
-            // Create the product
+            // Получаем ID текущего пользователя
+            var userIdClaim = User.FindFirst("userId");
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            {
+                return Unauthorized(new { message = "Не удалось определить пользователя" });
+            }
+
+            // Проверяем пользователя
+            var user = await _context.Users.FindAsync(userId);
+            if (user == null)
+            {
+                return NotFound(new { message = "Пользователь не найден" });
+            }
+
+            // Проверяем права: админ или владелец бизнес-аккаунта
+            var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+            if (userRole != "admin" && !user.IsBusiness)
+            {
+                return Forbid();
+            }
+
+            // Создаем продукт
             var product = new Product
             {
                 Name = productDto.Name,
                 Description = productDto.Description,
                 Price = productDto.Price,
-                ImageUrl = productDto.ImageUrl, // Store main image for backward compatibility
-                Category = productDto.Category
+                ImageUrl = productDto.ImageUrl, // Основное изображение для обратной совместимости
+                Category = productDto.Category,
+                BusinessOwnerId = user.IsBusiness ? userId : null // Устанавливаем владельца только для бизнес-аккаунтов
             };
 
             _context.Products.Add(product);
             await _context.SaveChangesAsync();
 
-            // Now add photos (including the main image as the first photo)
+            // Добавляем фотографии (включая основное изображение как первое фото)
             var photos = new List<ProductPhoto> {
-                new ProductPhoto {
-                    ImageUrl = productDto.ImageUrl,
-                    ProductId = product.Id,
-                    DisplayOrder = 1
-                }
-            };
+        new ProductPhoto {
+            ImageUrl = productDto.ImageUrl,
+            ProductId = product.Id,
+            DisplayOrder = 1
+        }
+    };
 
-            // Add additional photos if provided
+            // Добавляем дополнительные фотографии если они есть
             if (productDto.AdditionalPhotos != null && productDto.AdditionalPhotos.Any())
             {
                 int displayOrder = 2;
-                foreach (var photoUrl in productDto.AdditionalPhotos.Take(4)) // Limit to 4 additional photos (5 total)
+                foreach (var photoUrl in productDto.AdditionalPhotos.Take(4)) // Ограничиваем 4 дополнительными фото (5 всего)
                 {
                     if (!string.IsNullOrEmpty(photoUrl))
                     {
@@ -140,7 +164,7 @@ namespace market_api.Controllers
 
             await _context.ProductPhotos.AddRangeAsync(photos);
 
-            // Add specifications if provided
+            // Добавляем спецификации если есть
             if (productDto.Specifications != null && productDto.Specifications.Any())
             {
                 var specs = productDto.Specifications
@@ -157,7 +181,7 @@ namespace market_api.Controllers
 
             await _context.SaveChangesAsync();
 
-            // Return the created product with all relations
+            // Возвращаем созданный продукт со всеми связями
             var createdProduct = await _context.Products
                 .Include(p => p.Photos)
                 .Include(p => p.Specifications)
@@ -169,6 +193,12 @@ namespace market_api.Controllers
                     p.Price,
                     p.ImageUrl,
                     p.Category,
+                    p.BusinessOwnerId,
+                    BusinessOwner = p.BusinessOwner != null ? new
+                    {
+                        p.BusinessOwner.Username,
+                        p.BusinessOwner.CompanyName
+                    } : null,
                     Photos = p.Photos.OrderBy(ph => ph.DisplayOrder).Select(ph => new {
                         ph.Id,
                         ph.ImageUrl,

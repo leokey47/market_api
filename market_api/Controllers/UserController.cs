@@ -117,8 +117,47 @@ public class UserController : ControllerBase
 
         return Ok(new { message = "Avatar updated successfully" });
     }
+    [HttpPut("{id}/business")]
+    [Authorize]
+    public async Task<IActionResult> UpdateBusinessInfo(int id, [FromBody] UpdateBusinessInfoModel model)
+    {
+        var currentUserId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        if (currentUserId != id && userRole != "admin")
+        {
+            return Forbid();
+        }
+
+        var user = await _context.Users.FindAsync(id);
+        if (user == null)
+        {
+            return NotFound(new { message = "User not found" });
+        }
+
+        if (!user.IsBusiness)
+        {
+            return BadRequest(new { message = "User is not a business account" });
+        }
+
+        user.CompanyName = model.CompanyName;
+        user.CompanyAvatar = model.CompanyAvatar;
+        user.CompanyDescription = model.CompanyDescription;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Business info updated successfully" });
+    }
+
+    
 }
 
+public class UpdateBusinessInfoModel
+{
+    public string CompanyName { get; set; }
+    public string CompanyAvatar { get; set; }
+    public string CompanyDescription { get; set; }
+}
 public class UpdateUserModel
 {
     public string Username { get; set; }
