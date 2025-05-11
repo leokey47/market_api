@@ -63,7 +63,112 @@ namespace market_api.Controllers
                 return StatusCode(500, "Internal server error");
             }
         }
+        [HttpPost("admin/fake-payment/{orderId}")]
+        [Authorize(Roles = "admin")]
+        public async Task<IActionResult> AdminFakePayment(int orderId)
+        {
+            try
+            {
+                _logger.LogInformation("Admin fake payment initiated for order {OrderId}", orderId);
 
+                var order = await _context.Orders.FindAsync(orderId);
+                if (order == null)
+                {
+                    return NotFound(new { message = "Order not found" });
+                }
+
+                // Проверяем, что заказ еще не оплачен
+                if (order.Status == "Completed" || order.Status == "Confirmed")
+                {
+                    return BadRequest(new { message = "Order is already paid" });
+                }
+
+                // Создаем фейковый ID платежа (уменьшим длину для удобства)
+                var fakePaymentId = $"FAKE_{Guid.NewGuid().ToString("N").Substring(0, 12)}";
+
+                // Обновляем заказ как полностью оплаченный
+                order.Status = "Completed";
+                order.CompletedAt = DateTime.UtcNow;
+                order.PaymentId = fakePaymentId;
+                order.PaymentUrl = null; // Очищаем URL оплаты
+
+                // Убедимся, что PaymentCurrency установлен
+                if (string.IsNullOrEmpty(order.PaymentCurrency))
+                {
+                    order.PaymentCurrency = "USD"; // Устанавливаем валюту по умолчанию
+                }
+
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation("Admin fake payment completed for order {OrderId}. Payment ID: {PaymentId}",
+                    orderId, fakePaymentId);
+
+                return Ok(new
+                {
+                    message = "Fake payment successfully processed",
+                    orderId = order.OrderId,
+                    status = order.Status,
+                    paymentId = fakePaymentId
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing admin fake payment for order {OrderId}", orderId);
+                return StatusCode(500, new { message = "Error processing fake payment", error = ex.Message });
+            }
+        }
+
+        [HttpGet("admin/all-orders")]
+        [Authorize(Roles = "admin")]
+        public async Task<ActionResult<List<OrderStatusResponse>>> GetAllOrders(
+            [FromQuery] string status = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            try
+            {
+                var query = _context.Orders.AsQueryable();
+
+                if (!string.IsNullOrEmpty(status))
+                {
+                    query = query.Where(o => o.Status == status);
+                }
+
+                var totalCount = await query.CountAsync();
+
+                var orders = await query
+                    .OrderByDescending(o => o.CreatedAt)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var response = orders.Select(order => new OrderStatusResponse
+                {
+                    OrderId = order.OrderId,
+                    Status = order.Status ?? "Pending",
+                    Total = order.Total,
+                    Currency = order.PaymentCurrency ?? "",
+                    CreatedAt = order.CreatedAt,
+                    CompletedAt = order.CompletedAt,
+                    PaymentId = order.PaymentId ?? "",
+                    PaymentUrl = order.PaymentUrl ?? ""
+                }).ToList();
+
+                return Ok(new
+                {
+                    orders = response,
+                    totalCount,
+                    page,
+                    pageSize,
+                    totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all orders");
+                return StatusCode(500, new { message = "Error retrieving orders", error = ex.Message });
+            }
+        }
         // POST: api/Payment/create
         [HttpPost("create")]
         public async Task<ActionResult<PaymentResponse>> CreatePayment([FromBody] CreatePaymentRequest request)
@@ -381,11 +486,12 @@ namespace market_api.Controllers
             }
         }
 
-        
+
         // GET: api/Payment/orders
         // Improved version of the GetUserOrders method
 
         [HttpGet("orders")]
+        [Authorize]
         public async Task<ActionResult<List<OrderStatusResponse>>> GetUserOrders()
         {
             var userId = GetCurrentUserId();
@@ -394,40 +500,29 @@ namespace market_api.Controllers
 
             try
             {
-                _logger.LogInformation("Fetching orders for user {UserId}", userId);
-
                 var orders = await _context.Orders
                     .Where(o => o.UserId == userId)
                     .OrderByDescending(o => o.CreatedAt)
                     .ToListAsync();
 
-                _logger.LogInformation("Found {Count} orders for user {UserId}", orders.Count, userId);
-
-               
                 var response = orders.Select(order => new OrderStatusResponse
                 {
                     OrderId = order.OrderId,
-                    Status = order.Status ?? "Pending", // Default to Pending if null
+                    Status = order.Status ?? "Pending",
                     Total = order.Total,
-                    Currency = order.PaymentCurrency ?? "", // Empty string if null
+                    Currency = order.PaymentCurrency ?? "",
                     CreatedAt = order.CreatedAt,
                     CompletedAt = order.CompletedAt,
-                    PaymentId = order.PaymentId ?? "", // Empty string if null
-                    PaymentUrl = order.PaymentUrl ?? "" 
+                    PaymentId = order.PaymentId ?? "",
+                    PaymentUrl = order.PaymentUrl ?? ""
                 }).ToList();
 
-                
-                _logger.LogInformation("Returning {Count} order responses", response.Count);
-
-                
-                return response;
+                return Ok(response);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting user orders for UserId: {UserId}", userId);
-
-                
-                return StatusCode(500, new { message = "Ошибка при получении заказов. Пожалуйста, попробуйте позже." });
+                _logger.LogError(ex, "Error getting user orders");
+                return StatusCode(500, new { message = "Error loading orders", error = ex.Message });
             }
         }
 
@@ -459,13 +554,13 @@ namespace market_api.Controllers
     public class OrderStatusResponse
     {
         public int OrderId { get; set; }
-        public string Status { get; set; }
+        public string Status { get; set; } = "Pending";
         public decimal Total { get; set; }
-        public string Currency { get; set; }
+        public string Currency { get; set; } = "";
         public DateTime CreatedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
-        public string PaymentId { get; set; }
-        public string PaymentUrl { get; set; }
+        public string PaymentId { get; set; } = "";
+        public string PaymentUrl { get; set; } = "";
     }
 
     // NOWPayments API Models

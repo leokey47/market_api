@@ -109,7 +109,11 @@ var cloudinary = new Cloudinary(new Account(
     cloudinarySettings.ApiKey,
     cloudinarySettings.ApiSecret
 ));
-
+builder.Services.AddHttpClient("NovaPoshta", client =>
+{
+    client.BaseAddress = new Uri("https://api.novaposhta.ua/v2.0/json/");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 builder.Services.AddSingleton(cloudinary);
 
 // Add Authorization

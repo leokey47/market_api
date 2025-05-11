@@ -16,6 +16,7 @@ namespace market_api.Data
         public DbSet<ProductPhoto> ProductPhotos { get; set; }
         public DbSet<ProductSpecification> ProductSpecifications { get; set; }
         public DbSet<Order> Orders { get; set; }
+        public DbSet<Delivery> Deliveries { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
         public DbSet<ExternalLogin> ExternalLogins { get; set; }
 
@@ -104,6 +105,12 @@ namespace market_api.Data
             modelBuilder.Entity<ExternalLogin>()
                 .HasIndex(el => new { el.Provider, el.ProviderKey })
                 .IsUnique();
+
+            modelBuilder.Entity<Delivery>()
+            .HasOne(d => d.Order)
+            .WithOne()
+            .HasForeignKey<Delivery>(d => d.OrderId)
+            .OnDelete(DeleteBehavior.Cascade);
         }
     }
 }
