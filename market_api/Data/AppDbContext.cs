@@ -19,6 +19,7 @@ namespace market_api.Data
         public DbSet<Delivery> Deliveries { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
         public DbSet<ExternalLogin> ExternalLogins { get; set; }
+        public DbSet<Review> Reviews { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -111,6 +112,24 @@ namespace market_api.Data
             .WithOne()
             .HasForeignKey<Delivery>(d => d.OrderId)
             .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Review>()
+            .HasOne(r => r.User)
+            .WithMany()
+            .HasForeignKey(r => r.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Review>()
+                .HasOne(r => r.Product)
+                .WithMany()
+                .HasForeignKey(r => r.ProductId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Review>()
+                .HasOne(r => r.Order)
+                .WithMany()
+                .HasForeignKey(r => r.OrderId)
+                .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }
