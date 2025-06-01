@@ -75,8 +75,8 @@ namespace market_api.Controllers
                 // Fallback валюты если API не работает
                 var defaultCurrencies = new List<string>
                 {
-                    "BTC", "ETH", "TON", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
-                    
+                    "BTC", "ETH", "LTC", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
+                    "BNB", "SOL", "AVAX", "LINK", "UNI", "TRX", "XLM", "VET", "FIL", "THETA"
                 };
                 return Ok(defaultCurrencies);
             }
@@ -87,8 +87,8 @@ namespace market_api.Controllers
                 // Возвращаем fallback валюты при любой ошибке
                 var fallbackCurrencies = new List<string>
                 {
-                    "BTC", "ETH", "TON", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
-                    
+                    "BTC", "ETH", "LTC", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
+                    "BNB", "SOL", "AVAX", "LINK", "UNI", "TRX", "XLM", "VET", "FIL", "THETA"
                 };
                 return Ok(fallbackCurrencies);
             }
@@ -280,6 +280,107 @@ namespace market_api.Controllers
             {
                 _logger.LogError(ex, "Error checking order status for order {OrderId}", orderId);
                 return StatusCode(500, "Error checking order status");
+            }
+        }
+
+        // GET: api/Payment/admin/all-orders
+        [HttpGet("admin/all-orders")]
+        [Authorize(Roles = "admin")]
+        public async Task<ActionResult<AdminOrdersResponse>> GetAllOrdersForAdmin(
+            [FromQuery] string status = "",
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            try
+            {
+                // Validate parameters
+                if (page < 1) page = 1;
+                if (pageSize < 1 || pageSize > 100) pageSize = 20;
+
+                var filter = Builders<Order>.Filter.Empty;
+
+                // Apply status filter if provided
+                if (!string.IsNullOrEmpty(status))
+                {
+                    filter = Builders<Order>.Filter.Eq(o => o.Status, status);
+                }
+
+                // Get total count for pagination
+                var totalCount = await _context.Orders.CountDocumentsAsync(filter);
+                var totalPages = (int)Math.Ceiling((double)totalCount / pageSize);
+
+                // Get orders with pagination
+                var orders = await _context.Orders
+                    .Find(filter)
+                    .SortByDescending(o => o.CreatedAt)
+                    .Skip((page - 1) * pageSize)
+                    .Limit(pageSize)
+                    .ToListAsync();
+
+                var orderResponses = orders.Select(order => new OrderStatusResponse
+                {
+                    OrderId = order.Id!,
+                    Status = order.Status ?? "Pending",
+                    Total = order.Total,
+                    Currency = order.PaymentCurrency ?? "",
+                    CreatedAt = order.CreatedAt,
+                    CompletedAt = order.CompletedAt,
+                    PaymentId = order.PaymentId ?? "",
+                    PaymentUrl = order.PaymentUrl ?? ""
+                }).ToList();
+
+                return Ok(new AdminOrdersResponse
+                {
+                    Orders = orderResponses,
+                    TotalCount = (int)totalCount,
+                    TotalPages = totalPages,
+                    CurrentPage = page,
+                    PageSize = pageSize
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all orders for admin");
+                return StatusCode(500, new { message = "Error loading orders", error = ex.Message });
+            }
+        }
+
+        // POST: api/Payment/admin/fake-payment/{orderId}
+        [HttpPost("admin/fake-payment/{orderId}")]
+        [Authorize(Roles = "admin")]
+        public async Task<ActionResult<object>> ProcessFakePayment(string orderId)
+        {
+            try
+            {
+                var order = await _context.Orders.Find(o => o.Id == orderId).FirstOrDefaultAsync();
+                if (order == null)
+                    return NotFound(new { message = "Order not found" });
+
+                // Generate fake payment ID
+                var fakePaymentId = $"fake_payment_{DateTime.UtcNow:yyyyMMddHHmmss}_{new Random().Next(1000, 9999)}";
+
+                // Update order status to completed
+                order.Status = "Completed";
+                order.CompletedAt = DateTime.UtcNow;
+                order.PaymentId = fakePaymentId;
+
+                await _context.Orders.ReplaceOneAsync(o => o.Id == order.Id, order);
+
+                _logger.LogInformation("Admin processed fake payment for order {OrderId} with payment ID {PaymentId}",
+                    orderId, fakePaymentId);
+
+                return Ok(new
+                {
+                    message = "Fake payment processed successfully",
+                    orderId = orderId,
+                    paymentId = fakePaymentId,
+                    status = "Completed"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing fake payment for order {OrderId}", orderId);
+                return StatusCode(500, new { message = "Error processing fake payment", error = ex.Message });
             }
         }
 
@@ -511,6 +612,15 @@ namespace market_api.Controllers
         public DateTime? CompletedAt { get; set; }
         public string PaymentId { get; set; } = "";
         public string PaymentUrl { get; set; } = "";
+    }
+
+    public class AdminOrdersResponse
+    {
+        public List<OrderStatusResponse> Orders { get; set; } = new List<OrderStatusResponse>();
+        public int TotalCount { get; set; }
+        public int TotalPages { get; set; }
+        public int CurrentPage { get; set; }
+        public int PageSize { get; set; }
     }
 
     // NOWPayments API Models
