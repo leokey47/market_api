@@ -7,7 +7,7 @@ using market_api.Models;
 
 namespace market_api.Controllers
 {
-    [Route("api/User")]
+    [Route("api/[controller]")]
     [ApiController]
     [Authorize]
     public class BusinessController : ControllerBase
@@ -19,8 +19,8 @@ namespace market_api.Controllers
             _context = context;
         }
 
-        // POST: api/User/{userId}/business
-        [HttpPost("{userId}/business")]
+        // POST: api/Business/create/{userId}
+        [HttpPost("create/{userId}")]
         public async Task<IActionResult> CreateBusinessAccount(string userId, [FromBody] CreateBusinessAccountRequest request)
         {
             // Проверяем, что пользователь может изменять этот аккаунт
@@ -61,8 +61,8 @@ namespace market_api.Controllers
             }
         }
 
-        // PUT: api/User/{userId}/business
-        [HttpPut("{userId}/business")]
+        // PUT: api/Business/update/{userId}
+        [HttpPut("update/{userId}")]
         public async Task<IActionResult> UpdateBusinessAccount(string userId, [FromBody] UpdateBusinessAccountRequest request)
         {
             var currentUserId = GetCurrentUserId();
@@ -99,8 +99,8 @@ namespace market_api.Controllers
             }
         }
 
-        // GET: api/User/{userId}/products
-        [HttpGet("{userId}/products")]
+        // GET: api/Business/products/{userId}
+        [HttpGet("products/{userId}")]
         public async Task<ActionResult<IEnumerable<object>>> GetBusinessProducts(string userId)
         {
             var currentUserId = GetCurrentUserId();
@@ -162,6 +162,33 @@ namespace market_api.Controllers
             }
 
             return Ok(response);
+        }
+
+        // GET: api/Business/info/{userId}
+        [HttpGet("info/{userId}")]
+        public async Task<IActionResult> GetBusinessInfo(string userId)
+        {
+            var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return NotFound(new { message = "User not found" });
+            }
+
+            if (!user.IsBusiness)
+            {
+                return BadRequest(new { message = "User is not a business account" });
+            }
+
+            return Ok(new
+            {
+                user.Id,
+                user.Username,
+                user.Email,
+                user.CompanyName,
+                user.CompanyAvatar,
+                user.CompanyDescription,
+                user.IsBusiness
+            });
         }
 
         private string GetCurrentUserId()

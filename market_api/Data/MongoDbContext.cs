@@ -1,5 +1,6 @@
 ﻿using MongoDB.Driver;
 using market_api.Models;
+using Microsoft.Extensions.Configuration;
 
 namespace market_api.Data
 {

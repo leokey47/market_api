@@ -123,7 +123,8 @@ public class UserController : ControllerBase
         return Ok(new { message = "Avatar updated successfully" });
     }
 
-    [HttpPut("{id}/business")]
+    // PUT: api/User/{id}/business-info - изменен маршрут для избежания конфликта
+    [HttpPut("{id}/business-info")]
     [Authorize]
     public async Task<IActionResult> UpdateBusinessInfo(string id, [FromBody] UpdateBusinessInfoModel model)
     {
@@ -155,112 +156,9 @@ public class UserController : ControllerBase
         return Ok(new { message = "Business info updated successfully" });
     }
 
-    // POST: api/User/{userId}/business
-    [HttpPost("{userId}/business")]
-    public async Task<IActionResult> CreateBusinessAccount(string userId, [FromBody] CreateBusinessAccountRequest request)
-    {
-        // Проверяем, что пользователь может изменять этот аккаунт
-        var currentUserId = GetCurrentUserId();
-        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+    // Удален дублирующий метод CreateBusinessAccount - теперь он только в BusinessController
 
-        if (currentUserId != userId && userRole != "admin")
-        {
-            return Forbid();
-        }
-
-        var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
-        if (user == null)
-        {
-            return NotFound(new { message = "User not found" });
-        }
-
-        // Проверяем, не является ли пользователь уже бизнес-аккаунтом
-        if (user.IsBusiness)
-        {
-            return BadRequest(new { message = "User is already a business account" });
-        }
-
-        // Обновляем пользователя
-        user.IsBusiness = true;
-        user.CompanyName = request.CompanyName;
-        user.CompanyAvatar = request.CompanyAvatar;
-        user.CompanyDescription = request.CompanyDescription;
-
-        try
-        {
-            await _context.Users.ReplaceOneAsync(u => u.Id == userId, user);
-            return Ok(new { message = "Business account created successfully" });
-        }
-        catch (Exception)
-        {
-            return StatusCode(500, new { message = "Error creating business account" });
-        }
-    }
-
-    // GET: api/User/{userId}/products
-    [HttpGet("{userId}/products")]
-    public async Task<ActionResult<IEnumerable<object>>> GetBusinessProducts(string userId)
-    {
-        var currentUserId = GetCurrentUserId();
-        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
-
-        // Проверяем права доступа
-        if (currentUserId != userId && userRole != "admin")
-        {
-            return Forbid();
-        }
-
-        var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
-        if (user == null)
-        {
-            return NotFound(new { message = "User not found" });
-        }
-
-        if (!user.IsBusiness)
-        {
-            return BadRequest(new { message = "User is not a business account" });
-        }
-
-        var products = await _context.Products
-            .Find(p => p.BusinessOwnerId == userId)
-            .ToListAsync();
-
-        var response = new List<object>();
-
-        foreach (var product in products)
-        {
-            var photos = await _context.ProductPhotos
-                .Find(pp => pp.ProductId == product.Id)
-                .SortBy(pp => pp.DisplayOrder)
-                .ToListAsync();
-
-            var specifications = await _context.ProductSpecifications
-                .Find(ps => ps.ProductId == product.Id)
-                .ToListAsync();
-
-            response.Add(new
-            {
-                product.Id,
-                product.Name,
-                product.Description,
-                product.Price,
-                product.ImageUrl,
-                product.Category,
-                Photos = photos.Select(ph => new {
-                    ph.Id,
-                    ph.ImageUrl,
-                    ph.DisplayOrder
-                }),
-                Specifications = specifications.Select(s => new {
-                    s.Id,
-                    s.Name,
-                    s.Value
-                })
-            });
-        }
-
-        return Ok(response);
-    }
+    // Удален дублирующий метод GetBusinessProducts - теперь он только в BusinessController
 
     private string GetCurrentUserId()
     {
@@ -285,11 +183,4 @@ public class UpdateUserModel
 public class UpdateAvatarModel
 {
     public string ProfileImageUrl { get; set; } = string.Empty;
-}
-
-public class CreateBusinessAccountRequest
-{
-    public string CompanyName { get; set; } = string.Empty;
-    public string CompanyAvatar { get; set; } = string.Empty;
-    public string CompanyDescription { get; set; } = string.Empty;
 }
