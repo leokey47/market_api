@@ -1,24 +1,33 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class CartItem
     {
-        [Key]
-        public int CartItemId { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        public int UserId { get; set; }
-        [ForeignKey("UserId")]
-        public User User { get; set; }
+        [BsonElement("userId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string UserId { get; set; }
 
-        public int ProductId { get; set; }
-        [ForeignKey("ProductId")]
-        public Product Product { get; set; }
+        [BsonElement("productId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string ProductId { get; set; }
 
-        [Required]
+        [BsonElement("quantity")]
         public int Quantity { get; set; }
 
+        [BsonElement("addedAt")]
         public DateTime AddedAt { get; set; } = DateTime.UtcNow;
+
+        // Navigation properties (will be populated manually in services)
+        [BsonIgnore]
+        public User? User { get; set; }
+
+        [BsonIgnore]
+        public Product? Product { get; set; }
     }
 }

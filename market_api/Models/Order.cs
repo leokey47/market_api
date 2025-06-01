@@ -1,37 +1,45 @@
-﻿using market_api.Models;
-using System.ComponentModel.DataAnnotations.Schema;
-using System.ComponentModel.DataAnnotations;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
-public class Order
+namespace market_api.Models
 {
-    [Key]
-    public int OrderId { get; set; }
+    public class Order
+    {
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-    public int UserId { get; set; }
-    [ForeignKey("UserId")]
-    public User User { get; set; }
+        [BsonElement("userId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string UserId { get; set; }
 
-    [Required]
-    [Column(TypeName = "decimal(18,2)")]
-    public decimal Total { get; set; }
+        [BsonElement("total")]
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal Total { get; set; }
 
-    [MaxLength(50)]
-    public string? Status { get; set; }  // Добавляем nullable
+        [BsonElement("status")]
+        public string? Status { get; set; }
 
-    [Required]
-    public DateTime CreatedAt { get; set; }
+        [BsonElement("createdAt")]
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public DateTime? CompletedAt { get; set; }
+        [BsonElement("completedAt")]
+        public DateTime? CompletedAt { get; set; }
 
-    [MaxLength(255)]
-    public string? PaymentId { get; set; }  // Делаем nullable
+        [BsonElement("paymentId")]
+        public string? PaymentId { get; set; }
 
-    [MaxLength(500)]
-    public string? PaymentUrl { get; set; }  // Делаем nullable
+        [BsonElement("paymentUrl")]
+        public string? PaymentUrl { get; set; }
 
-    [MaxLength(10)]
-    public string? PaymentCurrency { get; set; }  // Делаем nullable
+        [BsonElement("paymentCurrency")]
+        public string? PaymentCurrency { get; set; }
 
-    // Navigation property
-    public virtual ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
+        // Navigation properties
+        [BsonIgnore]
+        public User? User { get; set; }
+
+        [BsonIgnore]
+        public List<OrderItem> Items { get; set; } = new List<OrderItem>();
+    }
 }

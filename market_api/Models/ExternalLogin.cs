@@ -1,24 +1,26 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class ExternalLogin
     {
-        [Key]
-        public int Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        [Required]
-        [MaxLength(50)]
-        public string Provider { get; set; } // "google", "facebook", "instagram"
+        [BsonElement("provider")]
+        public string Provider { get; set; } = string.Empty; // "google", "facebook", "instagram"
 
-        [Required]
-        [MaxLength(255)]
-        public string ProviderKey { get; set; } // The ID given by the provider
+        [BsonElement("providerKey")]
+        public string ProviderKey { get; set; } = string.Empty; // The ID given by the provider
 
-        public int UserId { get; set; }
+        [BsonElement("userId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string UserId { get; set; }
 
-        [ForeignKey("UserId")]
-        public User User { get; set; }
+        // Navigation property
+        [BsonIgnore]
+        public User? User { get; set; }
     }
 }

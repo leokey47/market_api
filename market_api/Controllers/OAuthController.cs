@@ -5,7 +5,7 @@ using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using market_api.Data;
 using market_api.Models;
 
@@ -15,12 +15,12 @@ namespace market_api.Controllers
     [ApiController]
     public class OAuthController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly ILogger<OAuthController> _logger;
 
         public OAuthController(
-            AppDbContext context,
+            MongoDbContext context,
             IConfiguration configuration,
             ILogger<OAuthController> logger)
         {
@@ -186,7 +186,8 @@ namespace market_api.Controllers
 
             // Проверяем существует ли пользователь с этим email
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email == email);
+                .Find(u => u.Email == email)
+                .FirstOrDefaultAsync();
 
             if (user == null)
             {
@@ -204,36 +205,24 @@ namespace market_api.Controllers
                 };
 
                 _logger.LogInformation("Создание нового пользователя {Username} из {Provider}", username, provider);
-                await _context.Users.AddAsync(user);
-                await _context.SaveChangesAsync();
+                await _context.Users.InsertOneAsync(user);
             }
 
-            // Проверяем существование таблицы ExternalLogin
-            var externalLoginExists = _context.Model.FindEntityType(typeof(ExternalLogin)) != null;
+            // Проверяем существует ли уже связь с внешним провайдером
+            var externalLogin = await _context.ExternalLogins
+                .Find(el => el.UserId == user.Id && el.Provider == provider)
+                .FirstOrDefaultAsync();
 
-            if (externalLoginExists)
+            if (externalLogin == null)
             {
-                // Проверяем существует ли уже связь с внешним провайдером
-                var externalLogin = await _context.ExternalLogins
-                    .FirstOrDefaultAsync(el => el.UserId == user.UserId && el.Provider == provider);
-
-                if (externalLogin == null)
+                // Добавляем новую связь с внешним провайдером
+                _logger.LogInformation("Добавление новой записи внешнего входа для пользователя {UserId}", user.Id);
+                await _context.ExternalLogins.InsertOneAsync(new ExternalLogin
                 {
-                    // Добавляем новую связь с внешним провайдером
-                    _logger.LogInformation("Добавление новой записи внешнего входа для пользователя {UserId}", user.UserId);
-                    await _context.ExternalLogins.AddAsync(new ExternalLogin
-                    {
-                        Provider = provider,
-                        ProviderKey = externalId,
-                        UserId = user.UserId
-                    });
-
-                    await _context.SaveChangesAsync();
-                }
-            }
-            else
-            {
-                _logger.LogWarning("Таблица ExternalLogin не найдена в модели. Убедитесь, что таблица добавлена в DbContext и миграции выполнены");
+                    Provider = provider,
+                    ProviderKey = externalId,
+                    UserId = user.Id!
+                });
             }
 
             // Генерируем JWT токен
@@ -253,7 +242,7 @@ namespace market_api.Controllers
             int counter = 1;
 
             // Проверяем существует ли уже пользователь с таким именем
-            while (await _context.Users.AnyAsync(u => u.Username == username))
+            while (await _context.Users.Find(u => u.Username == username).FirstOrDefaultAsync() != null)
             {
                 // Добавляем числовой суффикс и пробуем снова
                 username = $"{sanitizedName.ToLower()}{counter}";
@@ -265,7 +254,6 @@ namespace market_api.Controllers
 
         private string HashRandomPassword()
         {
-            var random = new Random();
             var password = Convert.ToBase64String(Guid.NewGuid().ToByteArray()).Substring(0, 16);
 
             using (var sha256 = System.Security.Cryptography.SHA256.Create())
@@ -285,7 +273,7 @@ namespace market_api.Controllers
                 {
                     new Claim(ClaimTypes.Name, user.Username),
                     new Claim(ClaimTypes.Role, user.Role),
-                    new Claim("userId", user.UserId.ToString())
+                    new Claim("userId", user.Id ?? string.Empty)
                 }),
                 Expires = DateTime.UtcNow.AddHours(24),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)

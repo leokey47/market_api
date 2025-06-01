@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver;
 using market_api.Models;
 using market_api.Data;
 using market_api.Services;
@@ -10,9 +11,9 @@ using System.Security.Claims;
 public class UserController : ControllerBase
 {
     private readonly IUserService _userService;
-    private readonly AppDbContext _context;
+    private readonly MongoDbContext _context;
 
-    public UserController(IUserService userService, AppDbContext context)
+    public UserController(IUserService userService, MongoDbContext context)
     {
         _userService = userService;
         _context = context;
@@ -20,10 +21,10 @@ public class UserController : ControllerBase
 
     [HttpGet("{id}")]
     [Authorize]
-    public IActionResult GetUserById(int id)
+    public async Task<IActionResult> GetUserById(string id)
     {
         // Check if the user is requesting their own data or is an admin
-        var currentUserId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
+        var currentUserId = User.FindFirst("userId")?.Value ?? string.Empty;
         var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
 
         if (currentUserId != id && userRole != "admin")
@@ -31,7 +32,7 @@ public class UserController : ControllerBase
             return Forbid();
         }
 
-        var user = _userService.GetUserById(id);
+        var user = await _userService.GetUserByIdAsync(id);
         if (user == null)
         {
             return NotFound(new { message = "User not found" });
@@ -41,10 +42,10 @@ public class UserController : ControllerBase
 
     [HttpPut("{id}")]
     [Authorize]
-    public IActionResult UpdateUser(int id, [FromBody] UpdateUserModel model)
+    public async Task<IActionResult> UpdateUser(string id, [FromBody] UpdateUserModel model)
     {
         // Check if the user is updating their own data or is an admin
-        var currentUserId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
+        var currentUserId = User.FindFirst("userId")?.Value ?? string.Empty;
         var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
 
         if (currentUserId != id && userRole != "admin")
@@ -52,7 +53,7 @@ public class UserController : ControllerBase
             return Forbid();
         }
 
-        var user = _context.Users.Find(id);
+        var user = await _context.Users.Find(u => u.Id == id).FirstOrDefaultAsync();
         if (user == null)
         {
             return NotFound(new { message = "User not found" });
@@ -62,7 +63,9 @@ public class UserController : ControllerBase
         if (!string.IsNullOrEmpty(model.Username))
         {
             // Check if the username is already taken by another user
-            var existingUser = _context.Users.FirstOrDefault(u => u.Username == model.Username && u.UserId != id);
+            var existingUser = await _context.Users
+                .Find(u => u.Username == model.Username && u.Id != id)
+                .FirstOrDefaultAsync();
             if (existingUser != null)
             {
                 return BadRequest(new { message = "Username is already taken" });
@@ -74,7 +77,9 @@ public class UserController : ControllerBase
         if (!string.IsNullOrEmpty(model.Email))
         {
             // Check if the email is already taken by another user
-            var existingUser = _context.Users.FirstOrDefault(u => u.Email == model.Email && u.UserId != id);
+            var existingUser = await _context.Users
+                .Find(u => u.Email == model.Email && u.Id != id)
+                .FirstOrDefaultAsync();
             if (existingUser != null)
             {
                 return BadRequest(new { message = "Email is already taken" });
@@ -83,17 +88,17 @@ public class UserController : ControllerBase
             user.Email = model.Email;
         }
 
-        _context.SaveChanges();
+        await _context.Users.ReplaceOneAsync(u => u.Id == id, user);
 
         return Ok(new { message = "User updated successfully" });
     }
 
     [HttpPut("{id}/avatar")]
     [Authorize]
-    public IActionResult UpdateAvatar(int id, [FromBody] UpdateAvatarModel model)
+    public async Task<IActionResult> UpdateAvatar(string id, [FromBody] UpdateAvatarModel model)
     {
         // Check if the user is updating their own avatar or is an admin
-        var currentUserId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
+        var currentUserId = User.FindFirst("userId")?.Value ?? string.Empty;
         var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
 
         if (currentUserId != id && userRole != "admin")
@@ -101,7 +106,7 @@ public class UserController : ControllerBase
             return Forbid();
         }
 
-        var user = _context.Users.Find(id);
+        var user = await _context.Users.Find(u => u.Id == id).FirstOrDefaultAsync();
         if (user == null)
         {
             return NotFound(new { message = "User not found" });
@@ -113,15 +118,16 @@ public class UserController : ControllerBase
         }
 
         user.ProfileImageUrl = model.ProfileImageUrl;
-        _context.SaveChanges();
+        await _context.Users.ReplaceOneAsync(u => u.Id == id, user);
 
         return Ok(new { message = "Avatar updated successfully" });
     }
+
     [HttpPut("{id}/business")]
     [Authorize]
-    public async Task<IActionResult> UpdateBusinessInfo(int id, [FromBody] UpdateBusinessInfoModel model)
+    public async Task<IActionResult> UpdateBusinessInfo(string id, [FromBody] UpdateBusinessInfoModel model)
     {
-        var currentUserId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
+        var currentUserId = User.FindFirst("userId")?.Value ?? string.Empty;
         var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
 
         if (currentUserId != id && userRole != "admin")
@@ -129,7 +135,7 @@ public class UserController : ControllerBase
             return Forbid();
         }
 
-        var user = await _context.Users.FindAsync(id);
+        var user = await _context.Users.Find(u => u.Id == id).FirstOrDefaultAsync();
         if (user == null)
         {
             return NotFound(new { message = "User not found" });
@@ -144,27 +150,146 @@ public class UserController : ControllerBase
         user.CompanyAvatar = model.CompanyAvatar;
         user.CompanyDescription = model.CompanyDescription;
 
-        await _context.SaveChangesAsync();
+        await _context.Users.ReplaceOneAsync(u => u.Id == id, user);
 
         return Ok(new { message = "Business info updated successfully" });
     }
 
-    
+    // POST: api/User/{userId}/business
+    [HttpPost("{userId}/business")]
+    public async Task<IActionResult> CreateBusinessAccount(string userId, [FromBody] CreateBusinessAccountRequest request)
+    {
+        // Проверяем, что пользователь может изменять этот аккаунт
+        var currentUserId = GetCurrentUserId();
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        if (currentUserId != userId && userRole != "admin")
+        {
+            return Forbid();
+        }
+
+        var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+        if (user == null)
+        {
+            return NotFound(new { message = "User not found" });
+        }
+
+        // Проверяем, не является ли пользователь уже бизнес-аккаунтом
+        if (user.IsBusiness)
+        {
+            return BadRequest(new { message = "User is already a business account" });
+        }
+
+        // Обновляем пользователя
+        user.IsBusiness = true;
+        user.CompanyName = request.CompanyName;
+        user.CompanyAvatar = request.CompanyAvatar;
+        user.CompanyDescription = request.CompanyDescription;
+
+        try
+        {
+            await _context.Users.ReplaceOneAsync(u => u.Id == userId, user);
+            return Ok(new { message = "Business account created successfully" });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { message = "Error creating business account" });
+        }
+    }
+
+    // GET: api/User/{userId}/products
+    [HttpGet("{userId}/products")]
+    public async Task<ActionResult<IEnumerable<object>>> GetBusinessProducts(string userId)
+    {
+        var currentUserId = GetCurrentUserId();
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        // Проверяем права доступа
+        if (currentUserId != userId && userRole != "admin")
+        {
+            return Forbid();
+        }
+
+        var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+        if (user == null)
+        {
+            return NotFound(new { message = "User not found" });
+        }
+
+        if (!user.IsBusiness)
+        {
+            return BadRequest(new { message = "User is not a business account" });
+        }
+
+        var products = await _context.Products
+            .Find(p => p.BusinessOwnerId == userId)
+            .ToListAsync();
+
+        var response = new List<object>();
+
+        foreach (var product in products)
+        {
+            var photos = await _context.ProductPhotos
+                .Find(pp => pp.ProductId == product.Id)
+                .SortBy(pp => pp.DisplayOrder)
+                .ToListAsync();
+
+            var specifications = await _context.ProductSpecifications
+                .Find(ps => ps.ProductId == product.Id)
+                .ToListAsync();
+
+            response.Add(new
+            {
+                product.Id,
+                product.Name,
+                product.Description,
+                product.Price,
+                product.ImageUrl,
+                product.Category,
+                Photos = photos.Select(ph => new {
+                    ph.Id,
+                    ph.ImageUrl,
+                    ph.DisplayOrder
+                }),
+                Specifications = specifications.Select(s => new {
+                    s.Id,
+                    s.Name,
+                    s.Value
+                })
+            });
+        }
+
+        return Ok(response);
+    }
+
+    private string GetCurrentUserId()
+    {
+        var userIdClaim = User.FindFirst("userId");
+        return userIdClaim?.Value ?? string.Empty;
+    }
 }
 
 public class UpdateBusinessInfoModel
 {
-    public string CompanyName { get; set; }
-    public string CompanyAvatar { get; set; }
-    public string CompanyDescription { get; set; }
+    public string CompanyName { get; set; } = string.Empty;
+    public string CompanyAvatar { get; set; } = string.Empty;
+    public string CompanyDescription { get; set; } = string.Empty;
 }
+
 public class UpdateUserModel
 {
-    public string Username { get; set; }
-    public string Email { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
 }
 
 public class UpdateAvatarModel
 {
-    public string ProfileImageUrl { get; set; }
+    public string ProfileImageUrl { get; set; } = string.Empty;
+}
+
+public class CreateBusinessAccountRequest
+{
+    public string CompanyName { get; set; } = string.Empty;
+    public string CompanyAvatar { get; set; } = string.Empty;
+    public string CompanyDescription { get; set; } = string.Empty;
 }

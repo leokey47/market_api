@@ -1,23 +1,26 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class ProductPhoto
     {
-        [Key]
-        public int Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        [Required]
-        public string ImageUrl { get; set; }
+        [BsonElement("imageUrl")]
+        public string ImageUrl { get; set; } = string.Empty;
 
-        // Foreign key relationship with Product
-        public int ProductId { get; set; }
+        [BsonElement("productId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string ProductId { get; set; }
 
-        [ForeignKey("ProductId")]
-        public Product Product { get; set; }
+        [BsonElement("displayOrder")]
+        public int DisplayOrder { get; set; } // Order priority for display (1-5)
 
-        // Order priority for display (1-5)
-        public int DisplayOrder { get; set; }
+        // Navigation property
+        [BsonIgnore]
+        public Product? Product { get; set; }
     }
 }

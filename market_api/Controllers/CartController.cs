@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using System.Security.Claims;
 using market_api.Data;
 using market_api.Models;
@@ -12,9 +12,9 @@ namespace market_api.Controllers
     [Authorize]
     public class CartController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
 
-        public CartController(AppDbContext context)
+        public CartController(MongoDbContext context)
         {
             _context = context;
         }
@@ -24,25 +24,35 @@ namespace market_api.Controllers
         public async Task<ActionResult<IEnumerable<CartItemResponse>>> GetCartItems()
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var cartItems = await _context.CartItems
-                .Include(c => c.Product)
-                .Where(c => c.UserId == userId)
+                .Find(c => c.UserId == userId)
                 .ToListAsync();
 
-            return cartItems.Select(item => new CartItemResponse
+            var response = new List<CartItemResponse>();
+
+            foreach (var item in cartItems)
             {
-                CartItemId = item.CartItemId,
-                ProductId = item.ProductId,
-                ProductName = item.Product.Name,
-                ProductDescription = item.Product.Description,
-                ProductImageUrl = item.Product.ImageUrl,
-                Price = item.Product.Price,
-                Quantity = item.Quantity,
-                TotalPrice = item.Product.Price * item.Quantity
-            }).ToList();
+                var product = await _context.Products.Find(p => p.Id == item.ProductId).FirstOrDefaultAsync();
+                if (product != null)
+                {
+                    response.Add(new CartItemResponse
+                    {
+                        CartItemId = item.Id ?? string.Empty,
+                        ProductId = item.ProductId,
+                        ProductName = product.Name,
+                        ProductDescription = product.Description,
+                        ProductImageUrl = product.ImageUrl,
+                        Price = product.Price,
+                        Quantity = item.Quantity,
+                        TotalPrice = product.Price * item.Quantity
+                    });
+                }
+            }
+
+            return response;
         }
 
         // POST: api/Cart
@@ -50,21 +60,21 @@ namespace market_api.Controllers
         public async Task<ActionResult<CartItem>> AddToCart(AddToCartRequest request)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
-            var product = await _context.Products.FindAsync(request.ProductId);
+            var product = await _context.Products.Find(p => p.Id == request.ProductId).FirstOrDefaultAsync();
             if (product == null)
                 return NotFound("Продукт не найден");
 
             var existingItem = await _context.CartItems
-                .Where(c => c.UserId == userId && c.ProductId == request.ProductId)
+                .Find(c => c.UserId == userId && c.ProductId == request.ProductId)
                 .FirstOrDefaultAsync();
 
             if (existingItem != null)
             {
                 existingItem.Quantity += request.Quantity;
-                _context.Entry(existingItem).State = EntityState.Modified;
+                await _context.CartItems.ReplaceOneAsync(c => c.Id == existingItem.Id, existingItem);
             }
             else
             {
@@ -75,62 +85,52 @@ namespace market_api.Controllers
                     Quantity = request.Quantity,
                     AddedAt = DateTime.UtcNow
                 };
-                _context.CartItems.Add(cartItem);
+                await _context.CartItems.InsertOneAsync(cartItem);
             }
 
-            await _context.SaveChangesAsync();
             return Ok(new { message = "Товар добавлен в корзину" });
         }
 
         // PUT: api/Cart/5
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateCartItem(int id, UpdateCartItemRequest request)
+        public async Task<IActionResult> UpdateCartItem(string id, UpdateCartItemRequest request)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var cartItem = await _context.CartItems
-                .Where(c => c.CartItemId == id && c.UserId == userId)
+                .Find(c => c.Id == id && c.UserId == userId)
                 .FirstOrDefaultAsync();
 
             if (cartItem == null)
                 return NotFound("Товар в корзине не найден");
 
             cartItem.Quantity = request.Quantity;
-            _context.Entry(cartItem).State = EntityState.Modified;
+            var result = await _context.CartItems.ReplaceOneAsync(c => c.Id == id, cartItem);
 
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!CartItemExists(id))
-                    return NotFound();
-                throw;
-            }
+            if (result.ModifiedCount == 0)
+                return NotFound();
 
             return NoContent();
         }
 
         // DELETE: api/Cart/5
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteCartItem(int id)
+        public async Task<IActionResult> DeleteCartItem(string id)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var cartItem = await _context.CartItems
-                .Where(c => c.CartItemId == id && c.UserId == userId)
+                .Find(c => c.Id == id && c.UserId == userId)
                 .FirstOrDefaultAsync();
 
             if (cartItem == null)
                 return NotFound("Товар в корзине не найден");
 
-            _context.CartItems.Remove(cartItem);
-            await _context.SaveChangesAsync();
+            await _context.CartItems.DeleteOneAsync(c => c.Id == id);
 
             return Ok(new { message = "Товар удален из корзины" });
         }
@@ -140,41 +140,28 @@ namespace market_api.Controllers
         public async Task<IActionResult> ClearCart()
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
-            var cartItems = await _context.CartItems
-                .Where(c => c.UserId == userId)
-                .ToListAsync();
-
-            _context.CartItems.RemoveRange(cartItems);
-            await _context.SaveChangesAsync();
+            await _context.CartItems.DeleteManyAsync(c => c.UserId == userId);
 
             return Ok(new { message = "Корзина очищена" });
         }
 
-        private bool CartItemExists(int id)
-        {
-            return _context.CartItems.Any(e => e.CartItemId == id);
-        }
-
-        private int GetCurrentUserId()
+        private string GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst("userId");
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                return 0;
-
-            return userId;
+            return userIdClaim?.Value ?? string.Empty;
         }
     }
 
     public class CartItemResponse
     {
-        public int CartItemId { get; set; }
-        public int ProductId { get; set; }
-        public string ProductName { get; set; }
-        public string ProductDescription { get; set; }
-        public string ProductImageUrl { get; set; }
+        public string CartItemId { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public string ProductDescription { get; set; } = string.Empty;
+        public string ProductImageUrl { get; set; } = string.Empty;
         public decimal Price { get; set; }
         public int Quantity { get; set; }
         public decimal TotalPrice { get; set; }
@@ -182,7 +169,7 @@ namespace market_api.Controllers
 
     public class AddToCartRequest
     {
-        public int ProductId { get; set; }
+        public string ProductId { get; set; } = string.Empty;
         public int Quantity { get; set; } = 1;
     }
 

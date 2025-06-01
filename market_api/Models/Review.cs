@@ -1,34 +1,43 @@
-﻿// Review.cs
-using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class Review
     {
-        [Key]
-        public int ReviewId { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        public int UserId { get; set; }
-        [ForeignKey("UserId")]
-        public User User { get; set; }
+        [BsonElement("userId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string UserId { get; set; }
 
-        public int ProductId { get; set; }
-        [ForeignKey("ProductId")]
-        public Product Product { get; set; }
+        [BsonElement("productId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string ProductId { get; set; }
 
-        public int OrderId { get; set; }
-        [ForeignKey("OrderId")]
-        public Order Order { get; set; }
+        [BsonElement("orderId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string OrderId { get; set; }
 
-        [Required]
-        [Range(1, 5)]
-        public int Rating { get; set; }
+        [BsonElement("rating")]
+        public int Rating { get; set; } // 1-5
 
-        [Required]
-        [MaxLength(1000)]
-        public string Text { get; set; }
+        [BsonElement("text")]
+        public string Text { get; set; } = string.Empty;
 
+        [BsonElement("createdAt")]
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        // Navigation properties
+        [BsonIgnore]
+        public User? User { get; set; }
+
+        [BsonIgnore]
+        public Product? Product { get; set; }
+
+        [BsonIgnore]
+        public Order? Order { get; set; }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
+using MongoDB.Bson;
 using System.Security.Claims;
 using market_api.Data;
 using market_api.Models;
@@ -13,12 +14,12 @@ namespace market_api.Controllers
     [Authorize]
     public class DeliveryController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly ILogger<DeliveryController> _logger;
 
         public DeliveryController(
-            AppDbContext context,
+            MongoDbContext context,
             IConfiguration configuration,
             ILogger<DeliveryController> logger)
         {
@@ -29,22 +30,24 @@ namespace market_api.Controllers
 
         // GET: api/Delivery/order/{orderId}
         [HttpGet("order/{orderId}")]
-        public async Task<ActionResult<Delivery>> GetDeliveryByOrder(int orderId)
+        public async Task<ActionResult<Delivery>> GetDeliveryByOrder(string orderId)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             // Проверяем, принадлежит ли заказ текущему пользователю
             var order = await _context.Orders
-                .FirstOrDefaultAsync(o => o.OrderId == orderId && o.UserId == userId);
+                .Find(o => o.Id == orderId && o.UserId == userId)
+                .FirstOrDefaultAsync();
 
             if (order == null)
                 return NotFound("Заказ не найден");
 
             // Получаем данные о доставке
             var delivery = await _context.Deliveries
-                .FirstOrDefaultAsync(d => d.OrderId == orderId);
+                .Find(d => d.OrderId == orderId)
+                .FirstOrDefaultAsync();
 
             if (delivery == null)
                 return NotFound("Информация о доставке не найдена");
@@ -57,19 +60,21 @@ namespace market_api.Controllers
         public async Task<ActionResult<Delivery>> CreateDelivery([FromBody] DeliveryCreateDto deliveryDto)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             // Проверяем существование заказа и его принадлежность пользователю
             var order = await _context.Orders
-                .FirstOrDefaultAsync(o => o.OrderId == deliveryDto.OrderId && o.UserId == userId);
+                .Find(o => o.Id == deliveryDto.OrderId && o.UserId == userId)
+                .FirstOrDefaultAsync();
 
             if (order == null)
                 return NotFound("Заказ не найден");
 
             // Проверяем, не создана ли уже доставка для этого заказа
             var existingDelivery = await _context.Deliveries
-                .FirstOrDefaultAsync(d => d.OrderId == deliveryDto.OrderId);
+                .Find(d => d.OrderId == deliveryDto.OrderId)
+                .FirstOrDefaultAsync();
 
             if (existingDelivery != null)
                 return BadRequest("Доставка для данного заказа уже создана");
@@ -98,26 +103,33 @@ namespace market_api.Controllers
                 delivery.DeliveryData = JsonSerializer.Serialize(deliveryDto.AdditionalData);
             }
 
-            _context.Deliveries.Add(delivery);
-            await _context.SaveChangesAsync();
+            await _context.Deliveries.InsertOneAsync(delivery);
 
             return CreatedAtAction(nameof(GetDeliveryByOrder), new { orderId = delivery.OrderId }, delivery);
         }
 
         // PUT: api/Delivery/{id}
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateDelivery(int id, [FromBody] DeliveryUpdateDto deliveryDto)
+        public async Task<IActionResult> UpdateDelivery(string id, [FromBody] DeliveryUpdateDto deliveryDto)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var delivery = await _context.Deliveries
-                .Include(d => d.Order)
-                .FirstOrDefaultAsync(d => d.DeliveryId == id && d.Order.UserId == userId);
+                .Find(d => d.Id == id)
+                .FirstOrDefaultAsync();
 
             if (delivery == null)
                 return NotFound("Информация о доставке не найдена");
+
+            // Проверяем, что заказ принадлежит пользователю
+            var order = await _context.Orders
+                .Find(o => o.Id == delivery.OrderId && o.UserId == userId)
+                .FirstOrDefaultAsync();
+
+            if (order == null)
+                return NotFound("Заказ не найден или не принадлежит пользователю");
 
             // Обновляем данные доставки
             if (!string.IsNullOrEmpty(deliveryDto.RecipientFullName))
@@ -149,23 +161,10 @@ namespace market_api.Controllers
                 delivery.DeliveryData = JsonSerializer.Serialize(deliveryDto.AdditionalData);
             }
 
-            _context.Entry(delivery).State = EntityState.Modified;
+            var result = await _context.Deliveries.ReplaceOneAsync(d => d.Id == id, delivery);
 
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!DeliveryExists(id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
+            if (result.ModifiedCount == 0)
+                return NotFound();
 
             return NoContent();
         }
@@ -173,9 +172,9 @@ namespace market_api.Controllers
         // PATCH: api/Delivery/{id}/status
         [HttpPatch("{id}/status")]
         [Authorize(Roles = "admin")]
-        public async Task<IActionResult> UpdateDeliveryStatus(int id, [FromBody] DeliveryStatusUpdateDto statusDto)
+        public async Task<IActionResult> UpdateDeliveryStatus(string id, [FromBody] DeliveryStatusUpdateDto statusDto)
         {
-            var delivery = await _context.Deliveries.FindAsync(id);
+            var delivery = await _context.Deliveries.Find(d => d.Id == id).FirstOrDefaultAsync();
             if (delivery == null)
                 return NotFound("Информация о доставке не найдена");
 
@@ -189,23 +188,10 @@ namespace market_api.Controllers
 
             delivery.UpdatedAt = DateTime.UtcNow;
 
-            _context.Entry(delivery).State = EntityState.Modified;
+            var result = await _context.Deliveries.ReplaceOneAsync(d => d.Id == id, delivery);
 
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!DeliveryExists(id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
+            if (result.ModifiedCount == 0)
+                return NotFound();
 
             return NoContent();
         }
@@ -215,39 +201,40 @@ namespace market_api.Controllers
         [Authorize(Roles = "admin")]
         public async Task<ActionResult<IEnumerable<DeliveryListItemDto>>> GetAllDeliveries([FromQuery] string status = null, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
         {
-            // Базовый запрос
-            IQueryable<Delivery> query = _context.Deliveries
-                .Include(d => d.Order)
-                .OrderByDescending(d => d.CreatedAt);
+            // Базовый фильтр
+            var filterBuilder = Builders<Delivery>.Filter.Empty;
 
             // Применяем фильтр по статусу, если указан
             if (!string.IsNullOrEmpty(status))
             {
-                query = query.Where(d => d.DeliveryStatus == status);
+                filterBuilder = Builders<Delivery>.Filter.Eq(d => d.DeliveryStatus, status);
             }
 
             // Считаем общее количество записей для пагинации
-            var totalCount = await query.CountAsync();
+            var totalCount = await _context.Deliveries.CountDocumentsAsync(filterBuilder);
 
-            // Применяем пагинацию
-            var deliveries = await query
+            // Применяем пагинацию и сортировку
+            var deliveries = await _context.Deliveries
+                .Find(filterBuilder)
+                .SortByDescending(d => d.CreatedAt)
                 .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .Select(d => new DeliveryListItemDto
-                {
-                    DeliveryId = d.DeliveryId,
-                    OrderId = d.OrderId,
-                    DeliveryMethod = d.DeliveryMethod,
-                    DeliveryType = d.DeliveryType,
-                    RecipientFullName = d.RecipientFullName,
-                    CityName = d.CityName,
-                    DeliveryStatus = d.DeliveryStatus,
-                    TrackingNumber = d.TrackingNumber,
-                    DeliveryCost = d.DeliveryCost,
-                    CreatedAt = d.CreatedAt,
-                    UpdatedAt = d.UpdatedAt
-                })
+                .Limit(pageSize)
                 .ToListAsync();
+
+            var response = deliveries.Select(d => new DeliveryListItemDto
+            {
+                DeliveryId = d.Id!,
+                OrderId = d.OrderId,
+                DeliveryMethod = d.DeliveryMethod,
+                DeliveryType = d.DeliveryType,
+                RecipientFullName = d.RecipientFullName,
+                CityName = d.CityName,
+                DeliveryStatus = d.DeliveryStatus,
+                TrackingNumber = d.TrackingNumber,
+                DeliveryCost = d.DeliveryCost,
+                CreatedAt = d.CreatedAt,
+                UpdatedAt = d.UpdatedAt
+            }).ToList();
 
             // Устанавливаем заголовки пагинации
             Response.Headers.Add("X-Total-Count", totalCount.ToString());
@@ -255,17 +242,17 @@ namespace market_api.Controllers
             Response.Headers.Add("X-Page-Size", pageSize.ToString());
             Response.Headers.Add("X-Total-Pages", Math.Ceiling((double)totalCount / pageSize).ToString());
 
-            return deliveries;
+            return response;
         }
 
         // GET: api/Delivery/{id}
         [HttpGet("{id}")]
         [Authorize(Roles = "admin")]
-        public async Task<ActionResult<Delivery>> GetDeliveryById(int id)
+        public async Task<ActionResult<Delivery>> GetDeliveryById(string id)
         {
             var delivery = await _context.Deliveries
-                .Include(d => d.Order)
-                .FirstOrDefaultAsync(d => d.DeliveryId == id);
+                .Find(d => d.Id == id)
+                .FirstOrDefaultAsync();
 
             if (delivery == null)
                 return NotFound("Информация о доставке не найдена");
@@ -275,18 +262,26 @@ namespace market_api.Controllers
 
         // POST: api/Delivery/{id}/tracking
         [HttpPost("{id}/tracking")]
-        public async Task<IActionResult> AddTrackingNumber(int id, [FromBody] TrackingNumberDto trackingDto)
+        public async Task<IActionResult> AddTrackingNumber(string id, [FromBody] TrackingNumberDto trackingDto)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var delivery = await _context.Deliveries
-                .Include(d => d.Order)
-                .FirstOrDefaultAsync(d => d.DeliveryId == id && d.Order.UserId == userId);
+                .Find(d => d.Id == id)
+                .FirstOrDefaultAsync();
 
             if (delivery == null)
                 return NotFound("Информация о доставке не найдена");
+
+            // Проверяем, что заказ принадлежит пользователю
+            var order = await _context.Orders
+                .Find(o => o.Id == delivery.OrderId && o.UserId == userId)
+                .FirstOrDefaultAsync();
+
+            if (order == null)
+                return NotFound("Заказ не найден или не принадлежит пользователю");
 
             // Проверяем, что трекинг номер указан
             if (string.IsNullOrEmpty(trackingDto.TrackingNumber))
@@ -297,8 +292,7 @@ namespace market_api.Controllers
             delivery.DeliveryStatus = "InTransit"; // Меняем статус на "В пути"
             delivery.UpdatedAt = DateTime.UtcNow;
 
-            _context.Entry(delivery).State = EntityState.Modified;
-            await _context.SaveChangesAsync();
+            await _context.Deliveries.ReplaceOneAsync(d => d.Id == id, delivery);
 
             return Ok(new { message = "Номер ТТН успешно добавлен", trackingNumber = delivery.TrackingNumber });
         }
@@ -351,94 +345,134 @@ namespace market_api.Controllers
         public async Task<ActionResult<object>> GetStatistics()
         {
             // Получаем статистику по доставкам
+            var totalDeliveries = await _context.Deliveries.CountDocumentsAsync(Builders<Delivery>.Filter.Empty);
+            var pendingDeliveries = await _context.Deliveries.CountDocumentsAsync(Builders<Delivery>.Filter.Eq(d => d.DeliveryStatus, "Pending"));
+            var inTransitDeliveries = await _context.Deliveries.CountDocumentsAsync(Builders<Delivery>.Filter.Eq(d => d.DeliveryStatus, "InTransit"));
+            var deliveredDeliveries = await _context.Deliveries.CountDocumentsAsync(Builders<Delivery>.Filter.Eq(d => d.DeliveryStatus, "Delivered"));
+            var failedDeliveries = await _context.Deliveries.CountDocumentsAsync(Builders<Delivery>.Filter.Eq(d => d.DeliveryStatus, "Failed"));
+
+            // Группировка по методам доставки
+            var deliveryMethodsPipeline = new[]
+            {
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", "$deliveryMethod" },
+                    { "count", new BsonDocument("$sum", 1) }
+                })
+            };
+            var deliveryMethodsAggregate = await _context.Deliveries
+                .Aggregate<BsonDocument>(deliveryMethodsPipeline)
+                .ToListAsync();
+
+            // Группировка по типам доставки
+            var deliveryTypesPipeline = new[]
+            {
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", "$deliveryType" },
+                    { "count", new BsonDocument("$sum", 1) }
+                })
+            };
+            var deliveryTypesAggregate = await _context.Deliveries
+                .Aggregate<BsonDocument>(deliveryTypesPipeline)
+                .ToListAsync();
+
+            // Средняя стоимость доставки
+            var averageCostPipeline = new[]
+            {
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", BsonNull.Value },
+                    { "averageCost", new BsonDocument("$avg", "$deliveryCost") }
+                })
+            };
+            var averageCostAggregate = await _context.Deliveries
+                .Aggregate<BsonDocument>(averageCostPipeline)
+                .FirstOrDefaultAsync();
+
             var statistics = new
             {
-                TotalDeliveries = await _context.Deliveries.CountAsync(),
-                PendingDeliveries = await _context.Deliveries.CountAsync(d => d.DeliveryStatus == "Pending"),
-                InTransitDeliveries = await _context.Deliveries.CountAsync(d => d.DeliveryStatus == "InTransit"),
-                DeliveredDeliveries = await _context.Deliveries.CountAsync(d => d.DeliveryStatus == "Delivered"),
-                FailedDeliveries = await _context.Deliveries.CountAsync(d => d.DeliveryStatus == "Failed"),
-
-                DeliveryMethods = await _context.Deliveries
-                    .GroupBy(d => d.DeliveryMethod)
-                    .Select(g => new { Method = g.Key, Count = g.Count() })
-                    .ToListAsync(),
-
-                DeliveryTypes = await _context.Deliveries
-                    .GroupBy(d => d.DeliveryType)
-                    .Select(g => new { Type = g.Key, Count = g.Count() })
-                    .ToListAsync(),
-
-                AverageDeliveryCost = await _context.Deliveries.AverageAsync(d => d.DeliveryCost)
+                TotalDeliveries = totalDeliveries,
+                PendingDeliveries = pendingDeliveries,
+                InTransitDeliveries = inTransitDeliveries,
+                DeliveredDeliveries = deliveredDeliveries,
+                FailedDeliveries = failedDeliveries,
+                DeliveryMethods = deliveryMethodsAggregate.Select(d => new {
+                    Method = d.GetValue("_id", "").AsString,
+                    Count = d.GetValue("count", 0).AsInt32
+                }).ToList(),
+                DeliveryTypes = deliveryTypesAggregate.Select(d => new {
+                    Type = d.GetValue("_id", "").AsString,
+                    Count = d.GetValue("count", 0).AsInt32
+                }).ToList(),
+                AverageDeliveryCost = averageCostAggregate?.GetValue("averageCost", 0.0).AsDouble ?? 0.0
             };
 
             return Ok(statistics);
         }
 
-        private int GetCurrentUserId()
+        private string GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst("userId");
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                return 0;
-
-            return userId;
+            return userIdClaim?.Value ?? string.Empty;
         }
 
-        private bool DeliveryExists(int id)
+        private async Task<bool> DeliveryExistsAsync(string id)
         {
-            return _context.Deliveries.Any(e => e.DeliveryId == id);
+            var delivery = await _context.Deliveries.Find(d => d.Id == id).FirstOrDefaultAsync();
+            return delivery != null;
         }
     }
 
     // DTO для создания доставки
     public class DeliveryCreateDto
     {
-        public int OrderId { get; set; }
-        public string DeliveryMethod { get; set; } // например, "NovaPoshta"
-        public string DeliveryType { get; set; } // например, "Warehouse" или "Courier"
-        public string RecipientFullName { get; set; }
-        public string RecipientPhone { get; set; }
-        public string CityRef { get; set; }
-        public string CityName { get; set; }
-        public string WarehouseRef { get; set; }
-        public string WarehouseAddress { get; set; }
-        public string DeliveryAddress { get; set; }
+        public string OrderId { get; set; } = string.Empty;
+        public string DeliveryMethod { get; set; } = string.Empty; // например, "NovaPoshta"
+        public string DeliveryType { get; set; } = string.Empty; // например, "Warehouse" или "Courier"
+        public string RecipientFullName { get; set; } = string.Empty;
+        public string RecipientPhone { get; set; } = string.Empty;
+        public string CityRef { get; set; } = string.Empty;
+        public string CityName { get; set; } = string.Empty;
+        public string WarehouseRef { get; set; } = string.Empty;
+        public string WarehouseAddress { get; set; } = string.Empty;
+        public string DeliveryAddress { get; set; } = string.Empty;
         public decimal DeliveryCost { get; set; }
-        public object AdditionalData { get; set; } // Дополнительные данные в формате JSON
+        public object? AdditionalData { get; set; } // Дополнительные данные в формате JSON
     }
 
     // DTO для обновления доставки
     public class DeliveryUpdateDto
     {
-        public string RecipientFullName { get; set; }
-        public string RecipientPhone { get; set; }
-        public string CityRef { get; set; }
-        public string CityName { get; set; }
-        public string WarehouseRef { get; set; }
-        public string WarehouseAddress { get; set; }
-        public string DeliveryAddress { get; set; }
-        public object AdditionalData { get; set; }
+        public string RecipientFullName { get; set; } = string.Empty;
+        public string RecipientPhone { get; set; } = string.Empty;
+        public string CityRef { get; set; } = string.Empty;
+        public string CityName { get; set; } = string.Empty;
+        public string WarehouseRef { get; set; } = string.Empty;
+        public string WarehouseAddress { get; set; } = string.Empty;
+        public string DeliveryAddress { get; set; } = string.Empty;
+        public object? AdditionalData { get; set; }
     }
 
     // DTO для обновления статуса доставки
     public class DeliveryStatusUpdateDto
     {
-        public string DeliveryStatus { get; set; }
-        public string TrackingNumber { get; set; }
+        public string DeliveryStatus { get; set; } = string.Empty;
+        public string TrackingNumber { get; set; } = string.Empty;
         public DateTime? EstimatedDeliveryDate { get; set; }
     }
 
     // DTO для списка доставок
     public class DeliveryListItemDto
     {
-        public int DeliveryId { get; set; }
-        public int OrderId { get; set; }
-        public string DeliveryMethod { get; set; }
-        public string DeliveryType { get; set; }
-        public string RecipientFullName { get; set; }
-        public string CityName { get; set; }
-        public string DeliveryStatus { get; set; }
-        public string TrackingNumber { get; set; }
+        public string DeliveryId { get; set; } = string.Empty;
+        public string OrderId { get; set; } = string.Empty;
+        public string DeliveryMethod { get; set; } = string.Empty;
+        public string DeliveryType { get; set; } = string.Empty;
+        public string RecipientFullName { get; set; } = string.Empty;
+        public string? CityName { get; set; }
+        public string DeliveryStatus { get; set; } = string.Empty;
+        public string? TrackingNumber { get; set; }
         public decimal DeliveryCost { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
@@ -447,6 +481,6 @@ namespace market_api.Controllers
     // DTO для добавления номера ТТН
     public class TrackingNumberDto
     {
-        public string TrackingNumber { get; set; }
+        public string TrackingNumber { get; set; } = string.Empty;
     }
 }

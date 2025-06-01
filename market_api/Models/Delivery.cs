@@ -1,73 +1,69 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class Delivery
     {
-        [Key]
-        public int DeliveryId { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        // ID заказа, к которому привязана доставка
-        public int OrderId { get; set; }
-        [ForeignKey("OrderId")]
-        public Order Order { get; set; }
+        [BsonElement("orderId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string OrderId { get; set; }
 
-        // Метод доставки: "NovaPoshta", "UkrPoshta", "Meest" и т.д.
-        [Required]
-        [MaxLength(50)]
-        public string DeliveryMethod { get; set; }
+        [BsonElement("deliveryMethod")]
+        public string DeliveryMethod { get; set; } = string.Empty; // "NovaPoshta", "UkrPoshta", "Meest"
 
-        // Способ доставки: "Warehouse", "Courier", "PostOffice" и т.д.
-        [Required]
-        [MaxLength(50)]
-        public string DeliveryType { get; set; }
+        [BsonElement("deliveryType")]
+        public string DeliveryType { get; set; } = string.Empty; // "Warehouse", "Courier", "PostOffice"
 
-        // Данные получателя
-        [Required]
-        [MaxLength(100)]
-        public string RecipientFullName { get; set; }
+        [BsonElement("recipientFullName")]
+        public string RecipientFullName { get; set; } = string.Empty;
 
-        [Required]
-        [MaxLength(20)]
-        public string RecipientPhone { get; set; }
+        [BsonElement("recipientPhone")]
+        public string RecipientPhone { get; set; } = string.Empty;
 
-        // Для отделений Новой почты
-        [MaxLength(36)]
-        public string CityRef { get; set; }
+        [BsonElement("cityRef")]
+        public string? CityRef { get; set; }
 
-        [MaxLength(100)]
-        public string CityName { get; set; }
+        [BsonElement("cityName")]
+        public string? CityName { get; set; }
 
-        [MaxLength(36)]
-        public string WarehouseRef { get; set; }
+        [BsonElement("warehouseRef")]
+        public string? WarehouseRef { get; set; }
 
-        [MaxLength(255)]
-        public string WarehouseAddress { get; set; }
+        [BsonElement("warehouseAddress")]
+        public string? WarehouseAddress { get; set; }
 
-        // Для адресной доставки
-        [MaxLength(255)]
-        public string DeliveryAddress { get; set; }
+        [BsonElement("deliveryAddress")]
+        public string? DeliveryAddress { get; set; }
 
-        // Для трекинга посылки
-        [MaxLength(50)]
-        public string TrackingNumber { get; set; }
+        [BsonElement("trackingNumber")]
+        public string? TrackingNumber { get; set; }
 
-        // Стоимость доставки
-        [Column(TypeName = "decimal(18,2)")]
+        [BsonElement("deliveryCost")]
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal DeliveryCost { get; set; }
 
-        // Ожидаемая дата доставки
+        [BsonElement("estimatedDeliveryDate")]
         public DateTime? EstimatedDeliveryDate { get; set; }
 
-        // Статус доставки
-        [MaxLength(50)]
-        public string DeliveryStatus { get; set; } = "Pending"; // Pending, InTransit, Delivered, Failed и т.д.
+        [BsonElement("deliveryStatus")]
+        public string DeliveryStatus { get; set; } = "Pending"; // Pending, InTransit, Delivered, Failed
 
-        // Дополнительные данные в JSON формате (для хранения ответов API)
-        public string DeliveryData { get; set; }
+        [BsonElement("deliveryData")]
+        public string? DeliveryData { get; set; } // JSON data
 
+        [BsonElement("createdAt")]
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        [BsonElement("updatedAt")]
         public DateTime? UpdatedAt { get; set; }
+
+        // Navigation property
+        [BsonIgnore]
+        public Order? Order { get; set; }
     }
 }

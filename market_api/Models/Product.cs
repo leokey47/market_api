@@ -1,39 +1,48 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class Product
     {
-        [Key]
-        public int Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        [Required]
-        [MaxLength(255)]
-        public string Name { get; set; }
+        [BsonElement("name")]
+        public string Name { get; set; } = string.Empty;
 
-        public string Description { get; set; }
+        [BsonElement("description")]
+        public string Description { get; set; } = string.Empty;
 
-        [Required]
+        [BsonElement("price")]
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal Price { get; set; }
 
-        // Main image URL (for backward compatibility)
-        public string ImageUrl { get; set; }
+        [BsonElement("imageUrl")]
+        public string ImageUrl { get; set; } = string.Empty; // Main image URL (for backward compatibility)
 
-        [Required]
-        [MaxLength(100)]
-        public string Category { get; set; }
+        [BsonElement("category")]
+        public string Category { get; set; } = string.Empty;
 
-        // Для бизнес-аккаунтов
-        public int? BusinessOwnerId { get; set; }  // ID владельца бизнес-аккаунта
+        [BsonElement("businessOwnerId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? BusinessOwnerId { get; set; } // ID владельца бизнес-аккаунта
 
-        [ForeignKey("BusinessOwnerId")]
-        public User BusinessOwner { get; set; }
+        [BsonElement("createdAt")]
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-        // Navigation properties for related entities
-        public virtual ICollection<ProductPhoto> Photos { get; set; } = new List<ProductPhoto>();
+        [BsonElement("updatedAt")]
+        public DateTime? UpdatedAt { get; set; }
 
-        public virtual ICollection<ProductSpecification> Specifications { get; set; } = new List<ProductSpecification>();
+        // Navigation properties (will be populated manually in services)
+        [BsonIgnore]
+        public User? BusinessOwner { get; set; }
+
+        [BsonIgnore]
+        public List<ProductPhoto> Photos { get; set; } = new List<ProductPhoto>();
+
+        [BsonIgnore]
+        public List<ProductSpecification> Specifications { get; set; } = new List<ProductSpecification>();
     }
 }

@@ -25,7 +25,7 @@ namespace market_api.Controllers
             _httpClientFactory = httpClientFactory;
             _configuration = configuration;
             _logger = logger;
-            _apiKey = _configuration["NovaPoshta:ApiKey"];
+            _apiKey = _configuration["NovaPoshta:ApiKey"] ?? string.Empty;
         }
 
         // GET: api/NovaPoshta/cities
@@ -172,8 +172,8 @@ namespace market_api.Controllers
         {
             try
             {
-                var userId = int.Parse(User.FindFirst("userId")?.Value ?? "0");
-                if (userId == 0)
+                var userId = User.FindFirst("userId")?.Value ?? string.Empty;
+                if (string.IsNullOrEmpty(userId))
                     return Unauthorized();
 
                 // Формируем запрос для создания экспресс-накладной
@@ -241,42 +241,42 @@ namespace market_api.Controllers
     // DTO для запросов
     public class DeliveryCalculationRequest
     {
-        public string SenderCityRef { get; set; }
-        public string RecipientCityRef { get; set; }
+        public string SenderCityRef { get; set; } = string.Empty;
+        public string RecipientCityRef { get; set; } = string.Empty;
         public double Weight { get; set; }
-        public string ServiceType { get; set; }
+        public string ServiceType { get; set; } = string.Empty;
         public decimal DeclaredValue { get; set; }
-        public string CargoType { get; set; }
+        public string CargoType { get; set; } = string.Empty;
         public int? SeatsAmount { get; set; }
     }
 
     public class CreateShippingRequest
     {
         // Основные данные об отправлении
-        public string PayerType { get; set; } // Кто платит за доставку
-        public string PaymentMethod { get; set; } // Способ оплаты
-        public string CargoType { get; set; } // Тип груза
+        public string PayerType { get; set; } = string.Empty; // Кто платит за доставку
+        public string PaymentMethod { get; set; } = string.Empty; // Способ оплаты
+        public string CargoType { get; set; } = string.Empty; // Тип груза
         public double VolumeGeneral { get; set; } // Общий объем
         public double Weight { get; set; } // Вес
-        public string ServiceType { get; set; } // Тип услуги
+        public string ServiceType { get; set; } = string.Empty; // Тип услуги
         public int SeatsAmount { get; set; } // Количество мест
-        public string Description { get; set; } // Описание
+        public string Description { get; set; } = string.Empty; // Описание
         public decimal Cost { get; set; } // Объявленная стоимость
 
         // Данные отправителя
-        public string CitySender { get; set; } // Реф города отправителя
-        public string Sender { get; set; } // Реф отправителя
-        public string SenderAddress { get; set; } // Реф адреса отправителя
-        public string ContactSender { get; set; } // Реф контакта отправителя
-        public string SenderId { get; set; } // ID отправителя
-        public string SenderWarehouseIndex { get; set; } // Индекс отделения отправителя
+        public string CitySender { get; set; } = string.Empty; // Реф города отправителя
+        public string Sender { get; set; } = string.Empty; // Реф отправителя
+        public string SenderAddress { get; set; } = string.Empty; // Реф адреса отправителя
+        public string ContactSender { get; set; } = string.Empty; // Реф контакта отправителя
+        public string SenderId { get; set; } = string.Empty; // ID отправителя
+        public string SenderWarehouseIndex { get; set; } = string.Empty; // Индекс отделения отправителя
 
         // Данные получателя
-        public string CityRecipient { get; set; } // Реф города получателя
-        public string Recipient { get; set; } // Реф получателя
-        public string RecipientAddress { get; set; } // Реф адреса получателя
-        public string ContactRecipient { get; set; } // Реф контакта получателя
-        public string RecipientId { get; set; } // ID получателя
-        public string RecipientWarehouseIndex { get; set; } // Индекс отделения получателя
+        public string CityRecipient { get; set; } = string.Empty; // Реф города получателя
+        public string Recipient { get; set; } = string.Empty; // Реф получателя
+        public string RecipientAddress { get; set; } = string.Empty; // Реф адреса получателя
+        public string ContactRecipient { get; set; } = string.Empty; // Реф контакта получателя
+        public string RecipientId { get; set; } = string.Empty; // ID получателя
+        public string RecipientWarehouseIndex { get; set; } = string.Empty; // Индекс отделения получателя
     }
 }

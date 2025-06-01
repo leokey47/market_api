@@ -6,7 +6,7 @@ using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using market_api.Data;
 using market_api.Models;
 
@@ -16,13 +16,13 @@ namespace market_api.Controllers
     [ApiController]
     public class GoogleAuthController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<GoogleAuthController> _logger;
 
         public GoogleAuthController(
-            AppDbContext context,
+            MongoDbContext context,
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory,
             ILogger<GoogleAuthController> logger)
@@ -229,7 +229,8 @@ namespace market_api.Controllers
 
             // Check if user exists with this email
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email == googleUser.Email);
+                .Find(u => u.Email == googleUser.Email)
+                .FirstOrDefaultAsync();
 
             if (user == null)
             {
@@ -247,36 +248,24 @@ namespace market_api.Controllers
                 };
 
                 _logger.LogInformation("Creating new user {Username} from Google", username);
-                await _context.Users.AddAsync(user);
-                await _context.SaveChangesAsync();
+                await _context.Users.InsertOneAsync(user);
             }
 
-            // Check existence of ExternalLogin table
-            var externalLoginExists = _context.Model.FindEntityType(typeof(ExternalLogin)) != null;
+            // Check if external provider link already exists
+            var externalLogin = await _context.ExternalLogins
+                .Find(el => el.UserId == user.Id && el.Provider == "google")
+                .FirstOrDefaultAsync();
 
-            if (externalLoginExists)
+            if (externalLogin == null)
             {
-                // Check if external provider link already exists
-                var externalLogin = await _context.ExternalLogins
-                    .FirstOrDefaultAsync(el => el.UserId == user.UserId && el.Provider == "google");
-
-                if (externalLogin == null)
+                // Add new external provider link
+                _logger.LogInformation("Adding new external login record for user {UserId}", user.Id);
+                await _context.ExternalLogins.InsertOneAsync(new ExternalLogin
                 {
-                    // Add new external provider link
-                    _logger.LogInformation("Adding new external login record for user {UserId}", user.UserId);
-                    await _context.ExternalLogins.AddAsync(new ExternalLogin
-                    {
-                        Provider = "google",
-                        ProviderKey = googleUser.Sub,
-                        UserId = user.UserId
-                    });
-
-                    await _context.SaveChangesAsync();
-                }
-            }
-            else
-            {
-                _logger.LogWarning("ExternalLogin table not found in model.");
+                    Provider = "google",
+                    ProviderKey = googleUser.Sub,
+                    UserId = user.Id!
+                });
             }
 
             // Generate JWT token
@@ -326,7 +315,7 @@ namespace market_api.Controllers
             int counter = 1;
 
             // Check if username already exists
-            while (await _context.Users.AnyAsync(u => u.Username == username))
+            while (await _context.Users.Find(u => u.Username == username).FirstOrDefaultAsync() != null)
             {
                 // Add numeric suffix and try again
                 username = $"{sanitizedName.ToLower()}{counter}";
@@ -357,7 +346,7 @@ namespace market_api.Controllers
                 {
                     new Claim(ClaimTypes.Name, user.Username),
                     new Claim(ClaimTypes.Role, user.Role),
-                    new Claim("userId", user.UserId.ToString())
+                    new Claim("userId", user.Id ?? string.Empty)
                 }),
                 Expires = DateTime.UtcNow.AddHours(24),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
@@ -399,49 +388,49 @@ namespace market_api.Controllers
     public class GoogleTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")]
-        public string AccessToken { get; set; }
+        public string AccessToken { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("expires_in")]
         public int ExpiresIn { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("token_type")]
-        public string TokenType { get; set; }
+        public string TokenType { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("scope")]
-        public string Scope { get; set; }
+        public string Scope { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("id_token")]
-        public string IdToken { get; set; }
+        public string IdToken { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")]
-        public string RefreshToken { get; set; }
+        public string RefreshToken { get; set; } = string.Empty;
     }
 
     public class GoogleUserInfo
     {
         [System.Text.Json.Serialization.JsonPropertyName("sub")]
-        public string Sub { get; set; }
+        public string Sub { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("name")]
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("given_name")]
-        public string GivenName { get; set; }
+        public string GivenName { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("family_name")]
-        public string FamilyName { get; set; }
+        public string FamilyName { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("picture")]
-        public string Picture { get; set; }
+        public string Picture { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("email")]
-        public string Email { get; set; }
+        public string Email { get; set; } = string.Empty;
 
         [System.Text.Json.Serialization.JsonPropertyName("email_verified")]
         public bool EmailVerified { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("locale")]
-        public string Locale { get; set; }
+        public string Locale { get; set; } = string.Empty;
 
         // Alias for compatibility
         public string Id => Sub;

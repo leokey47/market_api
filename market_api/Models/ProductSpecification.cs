@@ -1,25 +1,26 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class ProductSpecification
     {
-        [Key]
-        public int Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        [Required]
-        [MaxLength(100)]
-        public string Name { get; set; }
+        [BsonElement("name")]
+        public string Name { get; set; } = string.Empty;
 
-        [Required]
-        [MaxLength(255)]
-        public string Value { get; set; }
+        [BsonElement("value")]
+        public string Value { get; set; } = string.Empty;
 
-        // Foreign key relationship with Product
-        public int ProductId { get; set; }
+        [BsonElement("productId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string ProductId { get; set; }
 
-        [ForeignKey("ProductId")]
-        public Product Product { get; set; }
+        // Navigation property
+        [BsonIgnore]
+        public Product? Product { get; set; }
     }
 }

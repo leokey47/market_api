@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using System.Security.Claims;
 using market_api.Data;
 using market_api.Models;
@@ -11,7 +11,7 @@ namespace market_api.Controllers
     [ApiController]
     public class ReviewController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
         private readonly ILogger<ReviewController> _logger;
 
         // Define completed statuses as a static list for reuse
@@ -24,7 +24,7 @@ namespace market_api.Controllers
             "получен"
         };
 
-        public ReviewController(AppDbContext context, ILogger<ReviewController> logger)
+        public ReviewController(MongoDbContext context, ILogger<ReviewController> logger)
         {
             _context = context;
             _logger = logger;
@@ -32,24 +32,34 @@ namespace market_api.Controllers
 
         // GET: api/Review/Product/{productId}
         [HttpGet("Product/{productId}")]
-        public async Task<ActionResult<IEnumerable<ReviewResponse>>> GetProductReviews(int productId)
+        public async Task<ActionResult<IEnumerable<ReviewResponse>>> GetProductReviews(string productId)
         {
             try
             {
                 var reviews = await _context.Reviews
-                    .Include(r => r.User)
-                    .Where(r => r.ProductId == productId)
-                    .OrderByDescending(r => r.CreatedAt)
+                    .Find(r => r.ProductId == productId)
+                    .SortByDescending(r => r.CreatedAt)
                     .ToListAsync();
 
-                return reviews.Select(review => new ReviewResponse
+                var response = new List<ReviewResponse>();
+
+                foreach (var review in reviews)
                 {
-                    ReviewId = review.ReviewId,
-                    Username = review.User.Username,
-                    Rating = review.Rating,
-                    Text = review.Text,
-                    CreatedAt = review.CreatedAt
-                }).ToList();
+                    var user = await _context.Users.Find(u => u.Id == review.UserId).FirstOrDefaultAsync();
+                    if (user != null)
+                    {
+                        response.Add(new ReviewResponse
+                        {
+                            ReviewId = review.Id!,
+                            Username = user.Username,
+                            Rating = review.Rating,
+                            Text = review.Text,
+                            CreatedAt = review.CreatedAt
+                        });
+                    }
+                }
+
+                return response;
             }
             catch (Exception ex)
             {
@@ -64,27 +74,37 @@ namespace market_api.Controllers
         public async Task<ActionResult<IEnumerable<ReviewDetailResponse>>> GetUserReviews()
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
             {
                 var reviews = await _context.Reviews
-                    .Include(r => r.Product)
-                    .Where(r => r.UserId == userId)
-                    .OrderByDescending(r => r.CreatedAt)
+                    .Find(r => r.UserId == userId)
+                    .SortByDescending(r => r.CreatedAt)
                     .ToListAsync();
 
-                return reviews.Select(review => new ReviewDetailResponse
+                var response = new List<ReviewDetailResponse>();
+
+                foreach (var review in reviews)
                 {
-                    ReviewId = review.ReviewId,
-                    ProductId = review.ProductId,
-                    ProductName = review.Product.Name,
-                    ProductImageUrl = review.Product.ImageUrl,
-                    Rating = review.Rating,
-                    Text = review.Text,
-                    CreatedAt = review.CreatedAt
-                }).ToList();
+                    var product = await _context.Products.Find(p => p.Id == review.ProductId).FirstOrDefaultAsync();
+                    if (product != null)
+                    {
+                        response.Add(new ReviewDetailResponse
+                        {
+                            ReviewId = review.Id!,
+                            ProductId = review.ProductId,
+                            ProductName = product.Name,
+                            ProductImageUrl = product.ImageUrl,
+                            Rating = review.Rating,
+                            Text = review.Text,
+                            CreatedAt = review.CreatedAt
+                        });
+                    }
+                }
+
+                return response;
             }
             catch (Exception ex)
             {
@@ -99,7 +119,7 @@ namespace market_api.Controllers
         public async Task<ActionResult<Review>> CreateReview(CreateReviewRequest request)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
@@ -112,21 +132,23 @@ namespace market_api.Controllers
                     return BadRequest("Текст отзыва должен содержать не менее 10 символов");
 
                 // Check if product exists
-                var product = await _context.Products.FindAsync(request.ProductId);
+                var product = await _context.Products.Find(p => p.Id == request.ProductId).FirstOrDefaultAsync();
                 if (product == null)
                     return NotFound("Продукт не найден");
 
                 // Check if the user has purchased this product
-                // Move the status check to client evaluation to avoid EF Core translation issues
                 var orderItems = await _context.OrderItems
-                    .Include(oi => oi.Order)
-                    .Where(oi =>
-                        oi.ProductId == request.ProductId &&
-                        oi.Order.UserId == userId)
-                    .ToListAsync(); // Execute query first
+                    .Find(oi => oi.ProductId == request.ProductId)
+                    .ToListAsync();
 
-                // Now filter in memory using the IsOrderCompleted method
-                var completedOrder = orderItems.FirstOrDefault(oi => IsOrderCompleted(oi.Order.Status));
+                // Get orders for this user and check if any contain the product with completed status
+                var userOrders = await _context.Orders
+                    .Find(o => o.UserId == userId)
+                    .ToListAsync();
+
+                var completedOrder = userOrders.FirstOrDefault(order =>
+                    IsOrderCompleted(order.Status) &&
+                    orderItems.Any(oi => oi.OrderId == order.Id));
 
                 if (completedOrder == null)
                 {
@@ -136,7 +158,8 @@ namespace market_api.Controllers
 
                 // Check if user already reviewed this product
                 var existingReview = await _context.Reviews
-                    .FirstOrDefaultAsync(r => r.UserId == userId && r.ProductId == request.ProductId);
+                    .Find(r => r.UserId == userId && r.ProductId == request.ProductId)
+                    .FirstOrDefaultAsync();
 
                 if (existingReview != null)
                 {
@@ -145,8 +168,8 @@ namespace market_api.Controllers
                     existingReview.Text = request.Text.Trim();
                     existingReview.CreatedAt = DateTime.UtcNow;
 
-                    _context.Entry(existingReview).State = EntityState.Modified;
-                    _logger.LogInformation("Updated review {ReviewId} for user {UserId} and product {ProductId}", existingReview.ReviewId, userId, request.ProductId);
+                    await _context.Reviews.ReplaceOneAsync(r => r.Id == existingReview.Id, existingReview);
+                    _logger.LogInformation("Updated review {ReviewId} for user {UserId} and product {ProductId}", existingReview.Id, userId, request.ProductId);
                 }
                 else
                 {
@@ -155,17 +178,16 @@ namespace market_api.Controllers
                     {
                         UserId = userId,
                         ProductId = request.ProductId,
-                        OrderId = completedOrder.Order.OrderId,
+                        OrderId = completedOrder.Id!,
                         Rating = request.Rating,
                         Text = request.Text.Trim(),
                         CreatedAt = DateTime.UtcNow
                     };
 
-                    _context.Reviews.Add(review);
+                    await _context.Reviews.InsertOneAsync(review);
                     _logger.LogInformation("Created new review for user {UserId} and product {ProductId}", userId, request.ProductId);
                 }
 
-                await _context.SaveChangesAsync();
                 return Ok(new { message = "Отзыв сохранен" });
             }
             catch (Exception ex)
@@ -178,22 +200,22 @@ namespace market_api.Controllers
         // DELETE: api/Review/{id}
         [HttpDelete("{id}")]
         [Authorize]
-        public async Task<IActionResult> DeleteReview(int id)
+        public async Task<IActionResult> DeleteReview(string id)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
             {
                 var review = await _context.Reviews
-                    .FirstOrDefaultAsync(r => r.ReviewId == id && r.UserId == userId);
+                    .Find(r => r.Id == id && r.UserId == userId)
+                    .FirstOrDefaultAsync();
 
                 if (review == null)
                     return NotFound("Отзыв не найден");
 
-                _context.Reviews.Remove(review);
-                await _context.SaveChangesAsync();
+                await _context.Reviews.DeleteOneAsync(r => r.Id == id);
 
                 _logger.LogInformation("Deleted review {ReviewId} for user {UserId}", id, userId);
                 return Ok(new { message = "Отзыв удален" });
@@ -208,28 +230,32 @@ namespace market_api.Controllers
         // GET: api/Review/CanReview/{productId}
         [HttpGet("CanReview/{productId}")]
         [Authorize]
-        public async Task<ActionResult<CanReviewResponse>> CanUserReviewProduct(int productId)
+        public async Task<ActionResult<CanReviewResponse>> CanUserReviewProduct(string productId)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
             {
                 // Check if user has purchased this product
                 var orderItems = await _context.OrderItems
-                    .Include(oi => oi.Order)
-                    .Where(oi =>
-                        oi.ProductId == productId &&
-                        oi.Order.UserId == userId)
-                    .ToListAsync(); // Execute query first
+                    .Find(oi => oi.ProductId == productId)
+                    .ToListAsync();
 
-                // Filter in memory
-                var hasPurchased = orderItems.Any(oi => IsOrderCompleted(oi.Order.Status));
+                // Get orders for this user and check if any contain the product with completed status
+                var userOrders = await _context.Orders
+                    .Find(o => o.UserId == userId)
+                    .ToListAsync();
+
+                var hasPurchased = userOrders.Any(order =>
+                    IsOrderCompleted(order.Status) &&
+                    orderItems.Any(oi => oi.OrderId == order.Id));
 
                 // Check if user already reviewed this product
                 var hasReviewed = await _context.Reviews
-                    .AnyAsync(r => r.UserId == userId && r.ProductId == productId);
+                    .Find(r => r.UserId == userId && r.ProductId == productId)
+                    .FirstOrDefaultAsync() != null;
 
                 var canReview = hasPurchased && !hasReviewed;
 
@@ -251,16 +277,17 @@ namespace market_api.Controllers
         // GET: api/Review/Check/{productId}
         [HttpGet("Check/{productId}")]
         [Authorize]
-        public async Task<ActionResult<ReviewCheckResponse>> CheckUserReviewForProduct(int productId)
+        public async Task<ActionResult<ReviewCheckResponse>> CheckUserReviewForProduct(string productId)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
             {
                 var existingReview = await _context.Reviews
-                    .FirstOrDefaultAsync(r => r.UserId == userId && r.ProductId == productId);
+                    .Find(r => r.UserId == userId && r.ProductId == productId)
+                    .FirstOrDefaultAsync();
 
                 if (existingReview != null)
                 {
@@ -269,7 +296,7 @@ namespace market_api.Controllers
                         HasReview = true,
                         Review = new ReviewResponse
                         {
-                            ReviewId = existingReview.ReviewId,
+                            ReviewId = existingReview.Id!,
                             Username = "", // Не нужно для собственного отзыва
                             Rating = existingReview.Rating,
                             Text = existingReview.Text,
@@ -287,7 +314,7 @@ namespace market_api.Controllers
             }
         }
 
-        private bool IsOrderCompleted(string status)
+        private bool IsOrderCompleted(string? status)
         {
             if (string.IsNullOrWhiteSpace(status))
                 return false;
@@ -306,41 +333,38 @@ namespace market_api.Controllers
             return "Вы можете оставить отзыв на этот товар";
         }
 
-        private int GetCurrentUserId()
+        private string GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst("userId");
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                return 0;
-
-            return userId;
+            return userIdClaim?.Value ?? string.Empty;
         }
     }
 
     public class ReviewResponse
     {
-        public int ReviewId { get; set; }
-        public string Username { get; set; }
+        public string ReviewId { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
         public int Rating { get; set; }
-        public string Text { get; set; }
+        public string Text { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
     }
 
     public class ReviewDetailResponse
     {
-        public int ReviewId { get; set; }
-        public int ProductId { get; set; }
-        public string ProductName { get; set; }
-        public string ProductImageUrl { get; set; }
+        public string ReviewId { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public string ProductImageUrl { get; set; } = string.Empty;
         public int Rating { get; set; }
-        public string Text { get; set; }
+        public string Text { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
     }
 
     public class CreateReviewRequest
     {
-        public int ProductId { get; set; }
+        public string ProductId { get; set; } = string.Empty;
         public int Rating { get; set; }
-        public string Text { get; set; }
+        public string Text { get; set; } = string.Empty;
     }
 
     public class CanReviewResponse
@@ -348,12 +372,12 @@ namespace market_api.Controllers
         public bool CanReview { get; set; }
         public bool HasPurchased { get; set; }
         public bool HasReviewed { get; set; }
-        public string Message { get; set; }
+        public string Message { get; set; } = string.Empty;
     }
 
     public class ReviewCheckResponse
     {
         public bool HasReview { get; set; }
-        public ReviewResponse Review { get; set; }
+        public ReviewResponse? Review { get; set; }
     }
 }

@@ -1,26 +1,34 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace market_api.Models
 {
     public class OrderItem
     {
-        [Key]
-        public int OrderItemId { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? Id { get; set; }
 
-        public int OrderId { get; set; }
-        [ForeignKey("OrderId")]
-        public Order Order { get; set; }
+        [BsonElement("orderId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string OrderId { get; set; }
 
-        public int ProductId { get; set; }
-        [ForeignKey("ProductId")]
-        public Product Product { get; set; }
+        [BsonElement("productId")]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string ProductId { get; set; }
 
-        [Required]
+        [BsonElement("quantity")]
         public int Quantity { get; set; }
 
-        [Required]
-        [Column(TypeName = "decimal(18,2)")]
+        [BsonElement("price")]
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal Price { get; set; }
+
+        // Navigation properties
+        [BsonIgnore]
+        public Order? Order { get; set; }
+
+        [BsonIgnore]
+        public Product? Product { get; set; }
     }
 }

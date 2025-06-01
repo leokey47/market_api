@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using System.Security.Claims;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -19,13 +19,13 @@ namespace market_api.Controllers
     [Authorize]
     public class PaymentController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _configuration;
         private readonly ILogger<PaymentController> _logger;
 
         public PaymentController(
-            AppDbContext context,
+            MongoDbContext context,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             ILogger<PaymentController> logger)
@@ -36,149 +36,12 @@ namespace market_api.Controllers
             _logger = logger;
         }
 
-        // GET: api/Payment/currencies
-        [HttpGet("currencies")]
-        public async Task<ActionResult<List<string>>> GetAvailableCurrencies()
-        {
-            try
-            {
-                var apiKey = _configuration["NOWPayments:ApiKey"];
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
-
-                var response = await _httpClient.GetAsync("https://api.nowpayments.io/v1/currencies");
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var content = await response.Content.ReadAsStringAsync();
-                    var currenciesResponse = JsonSerializer.Deserialize<NowPaymentsCurrenciesResponse>(content);
-                    return Ok(currenciesResponse.Currencies);
-                }
-
-                return StatusCode((int)response.StatusCode, "Error retrieving available currencies");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error while getting available currencies");
-                return StatusCode(500, "Internal server error");
-            }
-        }
-
-        // POST: api/Payment/admin/fake-payment/{orderId}
-        [HttpPost("admin/fake-payment/{orderId}")]
-        [Authorize(Roles = "admin")]
-        public async Task<IActionResult> AdminFakePayment(int orderId)
-        {
-            try
-            {
-                _logger.LogInformation("Admin fake payment initiated for order {OrderId}", orderId);
-
-                var order = await _context.Orders.FindAsync(orderId);
-                if (order == null)
-                {
-                    return NotFound(new { message = "Order not found" });
-                }
-
-                // Проверяем, что заказ еще не оплачен
-                if (order.Status == "Completed" || order.Status == "Confirmed")
-                {
-                    return BadRequest(new { message = "Order is already paid" });
-                }
-
-                // Создаем фейковый ID платежа
-                var fakePaymentId = $"FAKE_{Guid.NewGuid().ToString("N").Substring(0, 12)}";
-
-                // Обновляем заказ как полностью оплаченный
-                order.Status = "Completed";
-                order.CompletedAt = DateTime.UtcNow;
-                order.PaymentId = fakePaymentId;
-                order.PaymentUrl = null; // Очищаем URL оплаты
-
-                // Убедимся, что PaymentCurrency установлен
-                if (string.IsNullOrEmpty(order.PaymentCurrency))
-                {
-                    order.PaymentCurrency = "USD"; // Устанавливаем валюту по умолчанию
-                }
-
-                await _context.SaveChangesAsync();
-
-                _logger.LogInformation("Admin fake payment completed for order {OrderId}. Payment ID: {PaymentId}",
-                    orderId, fakePaymentId);
-
-                return Ok(new
-                {
-                    message = "Fake payment successfully processed",
-                    orderId = order.OrderId,
-                    status = order.Status,
-                    paymentId = fakePaymentId
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing admin fake payment for order {OrderId}", orderId);
-                return StatusCode(500, new { message = "Error processing fake payment", error = ex.Message });
-            }
-        }
-
-        // GET: api/Payment/admin/all-orders
-        [HttpGet("admin/all-orders")]
-        [Authorize(Roles = "admin")]
-        public async Task<ActionResult> GetAllOrders(
-            [FromQuery] string status = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 20)
-        {
-            try
-            {
-                var query = _context.Orders.AsQueryable();
-
-                if (!string.IsNullOrEmpty(status))
-                {
-                    query = query.Where(o => o.Status == status);
-                }
-
-                var totalCount = await query.CountAsync();
-
-                var orders = await query
-                    .OrderByDescending(o => o.CreatedAt)
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
-                    .ToListAsync();
-
-                var response = orders.Select(order => new OrderStatusResponse
-                {
-                    OrderId = order.OrderId,
-                    Status = order.Status ?? "Pending",
-                    Total = order.Total,
-                    Currency = order.PaymentCurrency ?? "",
-                    CreatedAt = order.CreatedAt,
-                    CompletedAt = order.CompletedAt,
-                    PaymentId = order.PaymentId ?? "",
-                    PaymentUrl = order.PaymentUrl ?? ""
-                }).ToList();
-
-                return Ok(new
-                {
-                    orders = response,
-                    totalCount,
-                    page,
-                    pageSize,
-                    totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting all orders");
-                return StatusCode(500, new { message = "Error retrieving orders", error = ex.Message });
-            }
-        }
-
         // POST: api/Payment/create
         [HttpPost("create")]
         public async Task<ActionResult<PaymentResponse>> CreatePayment([FromBody] CreatePaymentRequest request)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
@@ -187,8 +50,7 @@ namespace market_api.Controllers
 
                 // Validate cart has items
                 var cartItems = await _context.CartItems
-                    .Include(c => c.Product)
-                    .Where(c => c.UserId == userId)
+                    .Find(c => c.UserId == userId)
                     .ToListAsync();
 
                 if (!cartItems.Any())
@@ -197,8 +59,20 @@ namespace market_api.Controllers
                     return BadRequest("Cart is empty");
                 }
 
-                // Calculate total
-                decimal total = cartItems.Sum(item => item.Product.Price * item.Quantity);
+                // Calculate total by getting product prices
+                decimal total = 0;
+                var cartProductDetails = new List<(CartItem cartItem, Product product)>();
+
+                foreach (var cartItem in cartItems)
+                {
+                    var product = await _context.Products.Find(p => p.Id == cartItem.ProductId).FirstOrDefaultAsync();
+                    if (product != null)
+                    {
+                        total += product.Price * cartItem.Quantity;
+                        cartProductDetails.Add((cartItem, product));
+                    }
+                }
+
                 _logger.LogInformation("Calculated total: {Total}", total);
 
                 // Create order in database
@@ -211,22 +85,20 @@ namespace market_api.Controllers
                     PaymentCurrency = request.Currency
                 };
 
-                _context.Orders.Add(order);
-                await _context.SaveChangesAsync();
-                _logger.LogInformation("Created order {OrderId} in database", order.OrderId);
+                await _context.Orders.InsertOneAsync(order);
+                _logger.LogInformation("Created order {OrderId} in database", order.Id);
 
                 // Create order items
-                var orderItems = cartItems.Select(cartItem => new OrderItem
+                var orderItems = cartProductDetails.Select(detail => new OrderItem
                 {
-                    OrderId = order.OrderId,
-                    ProductId = cartItem.ProductId,
-                    Quantity = cartItem.Quantity,
-                    Price = cartItem.Product.Price
+                    OrderId = order.Id!,
+                    ProductId = detail.cartItem.ProductId,
+                    Quantity = detail.cartItem.Quantity,
+                    Price = detail.product.Price
                 }).ToList();
 
-                _context.OrderItems.AddRange(orderItems);
-                await _context.SaveChangesAsync();
-                _logger.LogInformation("Added {Count} items to order {OrderId}", orderItems.Count, order.OrderId);
+                await _context.OrderItems.InsertManyAsync(orderItems);
+                _logger.LogInformation("Added {Count} items to order {OrderId}", orderItems.Count, order.Id);
 
                 // Create payment with NOWPayments API
                 var apiKey = _configuration["NOWPayments:ApiKey"];
@@ -245,8 +117,8 @@ namespace market_api.Controllers
                 _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
                 // Добавляем orderId в URL успешной оплаты и отмены
-                var successUrl = $"{_configuration["NOWPayments:SuccessUrl"]}?orderId={order.OrderId}";
-                var cancelUrl = $"{_configuration["NOWPayments:CancelUrl"]}?orderId={order.OrderId}";
+                var successUrl = $"{_configuration["NOWPayments:SuccessUrl"]}?orderId={order.Id}";
+                var cancelUrl = $"{_configuration["NOWPayments:CancelUrl"]}?orderId={order.Id}";
                 var ipnCallbackUrl = _configuration["NOWPayments:IpnCallbackUrl"];
 
                 _logger.LogInformation("Using callback URLs: Success={SuccessUrl}, Cancel={CancelUrl}, IPN={IpnUrl}",
@@ -261,8 +133,8 @@ namespace market_api.Controllers
                     ""price_amount"": ""{priceAmountStr}"",
                     ""price_currency"": ""usd"",
                     ""pay_currency"": ""{request.Currency}"",
-                    ""order_id"": ""{order.OrderId}"",
-                    ""order_description"": ""Order #{order.OrderId}"",
+                    ""order_id"": ""{order.Id}"",
+                    ""order_description"": ""Order #{order.Id}"",
                     ""ipn_callback_url"": ""{ipnCallbackUrl}"",
                     ""success_url"": ""{successUrl}"",
                     ""cancel_url"": ""{cancelUrl}""
@@ -289,17 +161,16 @@ namespace market_api.Controllers
                     // Update order with payment details
                     order.PaymentId = paymentResponse.Id;
                     order.PaymentUrl = paymentResponse.InvoiceUrl;
-                    await _context.SaveChangesAsync();
+                    await _context.Orders.ReplaceOneAsync(o => o.Id == order.Id, order);
                     _logger.LogInformation("Updated order with payment details: PaymentId={PaymentId}", paymentResponse.Id);
 
                     // Clear cart after successful order creation
-                    _context.CartItems.RemoveRange(cartItems);
-                    await _context.SaveChangesAsync();
+                    await _context.CartItems.DeleteManyAsync(c => c.UserId == userId);
                     _logger.LogInformation("Cleared cart for user {UserId}", userId);
 
                     return Ok(new PaymentResponse
                     {
-                        OrderId = order.OrderId,
+                        OrderId = order.Id!,
                         PaymentId = paymentResponse.Id,
                         PaymentUrl = paymentResponse.InvoiceUrl,
                         Total = total,
@@ -318,100 +189,26 @@ namespace market_api.Controllers
             }
         }
 
-        // GET: api/Payment/orders/{orderId}/items
-        [HttpGet("orders/{orderId}/items")]
-        public async Task<ActionResult<List<OrderItemResponse>>> GetOrderItems(int orderId)
-        {
-            var userId = GetCurrentUserId();
-            if (userId == 0)
-                return Unauthorized();
-
-            try
-            {
-                // Verify the order belongs to the current user
-                var order = await _context.Orders
-                    .FirstOrDefaultAsync(o => o.OrderId == orderId && o.UserId == userId);
-
-                if (order == null)
-                    return NotFound("Order not found");
-
-                var orderItems = await _context.OrderItems
-                    .Include(oi => oi.Product)
-                    .Where(oi => oi.OrderId == orderId)
-                    .ToListAsync();
-
-                var response = orderItems.Select(item => new OrderItemResponse
-                {
-                    OrderItemId = item.OrderItemId,
-                    ProductId = item.ProductId,
-                    ProductName = item.Product.Name,
-                    ProductDescription = item.Product.Description,
-                    ProductImageUrl = item.Product.ImageUrl,
-                    Price = item.Price,
-                    Quantity = item.Quantity
-                }).ToList();
-
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting order items for order {OrderId}", orderId);
-                return StatusCode(500, "Error retrieving order items");
-            }
-        }
-
-        // POST: api/Payment/test-complete/{orderId}
-        [HttpPost("test-complete/{orderId}")]
-        public async Task<ActionResult> TestCompleteOrder(int orderId)
-        {
-            var userId = GetCurrentUserId();
-            if (userId == 0)
-                return Unauthorized();
-
-            try
-            {
-                var order = await _context.Orders
-                    .FirstOrDefaultAsync(o => o.OrderId == orderId && o.UserId == userId);
-
-                if (order == null)
-                    return NotFound("Order not found");
-
-                // Update order status to completed for testing
-                order.Status = "Completed";
-                order.CompletedAt = DateTime.UtcNow;
-
-                await _context.SaveChangesAsync();
-
-                _logger.LogInformation("Test completed order {OrderId} for user {UserId}", orderId, userId);
-
-                return Ok(new { message = "Order marked as completed for testing" });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error test completing order {OrderId}", orderId);
-                return StatusCode(500, "Error completing order");
-            }
-        }
-
         // GET: api/Payment/check/{orderId}
         [HttpGet("check/{orderId}")]
-        public async Task<ActionResult<OrderStatusResponse>> CheckOrderStatus(int orderId)
+        public async Task<ActionResult<OrderStatusResponse>> CheckOrderStatus(string orderId)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             try
             {
                 var order = await _context.Orders
-                    .FirstOrDefaultAsync(o => o.OrderId == orderId && o.UserId == userId);
+                    .Find(o => o.Id == orderId && o.UserId == userId)
+                    .FirstOrDefaultAsync();
 
                 if (order == null)
                     return NotFound("Order not found");
 
                 return Ok(new OrderStatusResponse
                 {
-                    OrderId = order.OrderId,
+                    OrderId = order.Id!,
                     Status = order.Status ?? "Pending",
                     Total = order.Total,
                     Currency = order.PaymentCurrency ?? "",
@@ -425,6 +222,93 @@ namespace market_api.Controllers
             {
                 _logger.LogError(ex, "Error checking order status for order {OrderId}", orderId);
                 return StatusCode(500, "Error checking order status");
+            }
+        }
+
+        // GET: api/Payment/orders
+        [HttpGet("orders")]
+        public async Task<ActionResult<List<OrderStatusResponse>>> GetUserOrders()
+        {
+            var userId = GetCurrentUserId();
+            if (string.IsNullOrEmpty(userId))
+                return Unauthorized();
+
+            try
+            {
+                var orders = await _context.Orders
+                    .Find(o => o.UserId == userId)
+                    .SortByDescending(o => o.CreatedAt)
+                    .ToListAsync();
+
+                var response = orders.Select(order => new OrderStatusResponse
+                {
+                    OrderId = order.Id!,
+                    Status = order.Status ?? "Pending",
+                    Total = order.Total,
+                    Currency = order.PaymentCurrency ?? "",
+                    CreatedAt = order.CreatedAt,
+                    CompletedAt = order.CompletedAt,
+                    PaymentId = order.PaymentId ?? "",
+                    PaymentUrl = order.PaymentUrl ?? ""
+                }).ToList();
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting user orders for user {UserId}", userId);
+                return StatusCode(500, new { message = "Error loading orders", error = ex.Message });
+            }
+        }
+
+        // GET: api/Payment/orders/{orderId}/items
+        [HttpGet("orders/{orderId}/items")]
+        public async Task<ActionResult<List<OrderItemResponse>>> GetOrderItems(string orderId)
+        {
+            var userId = GetCurrentUserId();
+            if (string.IsNullOrEmpty(userId))
+                return Unauthorized();
+
+            try
+            {
+                // Verify the order belongs to the current user
+                var order = await _context.Orders
+                    .Find(o => o.Id == orderId && o.UserId == userId)
+                    .FirstOrDefaultAsync();
+
+                if (order == null)
+                    return NotFound("Order not found");
+
+                var orderItems = await _context.OrderItems
+                    .Find(oi => oi.OrderId == orderId)
+                    .ToListAsync();
+
+                var response = new List<OrderItemResponse>();
+
+                foreach (var item in orderItems)
+                {
+                    var product = await _context.Products.Find(p => p.Id == item.ProductId).FirstOrDefaultAsync();
+                    if (product != null)
+                    {
+                        response.Add(new OrderItemResponse
+                        {
+                            OrderItemId = item.Id!,
+                            ProductId = item.ProductId,
+                            ProductName = product.Name,
+                            ProductDescription = product.Description,
+                            ProductImageUrl = product.ImageUrl,
+                            Price = item.Price,
+                            Quantity = item.Quantity
+                        });
+                    }
+                }
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting order items for order {OrderId}", orderId);
+                return StatusCode(500, "Error retrieving order items");
             }
         }
 
@@ -460,9 +344,9 @@ namespace market_api.Controllers
                     }
 
                     // Process based on event type
-                    if (webhookEvent.EventType == "payment" && !string.IsNullOrEmpty(webhookEvent.OrderId) && int.TryParse(webhookEvent.OrderId, out int orderId))
+                    if (webhookEvent.EventType == "payment" && !string.IsNullOrEmpty(webhookEvent.OrderId))
                     {
-                        var order = await _context.Orders.FindAsync(orderId);
+                        var order = await _context.Orders.Find(o => o.Id == webhookEvent.OrderId).FirstOrDefaultAsync();
                         if (order != null)
                         {
                             // Update order status based on payment status
@@ -496,12 +380,12 @@ namespace market_api.Controllers
                                     break;
                             }
 
-                            await _context.SaveChangesAsync();
-                            _logger.LogInformation("Updated order {OrderId} status to {Status}", orderId, order.Status);
+                            await _context.Orders.ReplaceOneAsync(o => o.Id == order.Id, order);
+                            _logger.LogInformation("Updated order {OrderId} status to {Status}", webhookEvent.OrderId, order.Status);
                         }
                         else
                         {
-                            _logger.LogWarning("Order {OrderId} not found for webhook", orderId);
+                            _logger.LogWarning("Order {OrderId} not found for webhook", webhookEvent.OrderId);
                         }
                     }
                     else
@@ -513,54 +397,6 @@ namespace market_api.Controllers
                 catch (JsonException ex)
                 {
                     _logger.LogError(ex, "Error deserializing webhook payload");
-
-                    // Try alternate format - NOWPayments may send different formats
-                    try
-                    {
-                        // Try to parse as dynamic JSON in case the format is different
-                        using (JsonDocument document = JsonDocument.Parse(body))
-                        {
-                            var root = document.RootElement;
-
-                            // Try to extract fields regardless of structure
-                            if (root.TryGetProperty("order_id", out var orderIdElement) &&
-                                orderIdElement.ValueKind == JsonValueKind.String &&
-                                int.TryParse(orderIdElement.GetString(), out int orderId))
-                            {
-                                var order = await _context.Orders.FindAsync(orderId);
-                                if (order != null)
-                                {
-                                    // Try to extract payment status
-                                    string status = "Unknown";
-                                    if (root.TryGetProperty("payment_status", out var statusElement) &&
-                                        statusElement.ValueKind == JsonValueKind.String)
-                                    {
-                                        status = statusElement.GetString() ?? "Unknown";
-                                    }
-
-                                    // Update order status
-                                    switch (status.ToLower())
-                                    {
-                                        case "finished":
-                                        case "confirmed":
-                                            order.Status = "Completed";
-                                            order.CompletedAt = DateTime.UtcNow;
-                                            break;
-                                        default:
-                                            order.Status = status;
-                                            break;
-                                    }
-
-                                    await _context.SaveChangesAsync();
-                                    _logger.LogInformation("Updated order {OrderId} status to {Status} (alternate format)", orderId, order.Status);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception alternateEx)
-                    {
-                        _logger.LogError(alternateEx, "Error processing webhook with alternate parsing");
-                    }
                 }
 
                 // Always return OK to NOWPayments even if we couldn't process it
@@ -574,81 +410,42 @@ namespace market_api.Controllers
             }
         }
 
-        // GET: api/Payment/orders
-        [HttpGet("orders")]
-        public async Task<ActionResult<List<OrderStatusResponse>>> GetUserOrders()
-        {
-            var userId = GetCurrentUserId();
-            if (userId == 0)
-                return Unauthorized();
-
-            try
-            {
-                var orders = await _context.Orders
-                    .Where(o => o.UserId == userId)
-                    .OrderByDescending(o => o.CreatedAt)
-                    .ToListAsync();
-
-                var response = orders.Select(order => new OrderStatusResponse
-                {
-                    OrderId = order.OrderId,
-                    Status = order.Status ?? "Pending",
-                    Total = order.Total,
-                    Currency = order.PaymentCurrency ?? "",
-                    CreatedAt = order.CreatedAt,
-                    CompletedAt = order.CompletedAt,
-                    PaymentId = order.PaymentId ?? "",
-                    PaymentUrl = order.PaymentUrl ?? ""
-                }).ToList();
-
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting user orders for user {UserId}", userId);
-                return StatusCode(500, new { message = "Error loading orders", error = ex.Message });
-            }
-        }
-
-        private int GetCurrentUserId()
+        private string GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst("userId");
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                return 0;
-
-            return userId;
+            return userIdClaim?.Value ?? string.Empty;
         }
     }
 
     // Request & Response DTOs
     public class CreatePaymentRequest
     {
-        public string Currency { get; set; } // Cryptocurrency code (BTC, ETH, etc.)
+        public string Currency { get; set; } = string.Empty; // Cryptocurrency code (BTC, ETH, etc.)
     }
 
     public class PaymentResponse
     {
-        public int OrderId { get; set; }
-        public string PaymentId { get; set; }
-        public string PaymentUrl { get; set; }
+        public string OrderId { get; set; } = string.Empty;
+        public string PaymentId { get; set; } = string.Empty;
+        public string PaymentUrl { get; set; } = string.Empty;
         public decimal Total { get; set; }
-        public string Currency { get; set; }
+        public string Currency { get; set; } = string.Empty;
     }
 
     public class OrderItemResponse
     {
-        public int OrderItemId { get; set; }
-        public int ProductId { get; set; }
-        public string ProductName { get; set; }
-        public string ProductDescription { get; set; }
-        public string ProductImageUrl { get; set; }
+        public string OrderItemId { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public string ProductDescription { get; set; } = string.Empty;
+        public string ProductImageUrl { get; set; } = string.Empty;
         public int Quantity { get; set; }
         public decimal Price { get; set; }
     }
 
     public class OrderStatusResponse
     {
-        public int OrderId { get; set; }
+        public string OrderId { get; set; } = string.Empty;
         public string Status { get; set; } = "Pending";
         public decimal Total { get; set; }
         public string Currency { get; set; } = "";
@@ -662,51 +459,51 @@ namespace market_api.Controllers
     public class NowPaymentsInvoiceResponse
     {
         [JsonPropertyName("id")]
-        public string Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
         [JsonPropertyName("invoice_url")]
-        public string InvoiceUrl { get; set; }
+        public string InvoiceUrl { get; set; } = string.Empty;
 
         [JsonPropertyName("order_id")]
-        public string OrderId { get; set; }
+        public string OrderId { get; set; } = string.Empty;
 
         [JsonPropertyName("payment_status")]
-        public string PaymentStatus { get; set; }
+        public string PaymentStatus { get; set; } = string.Empty;
 
         [JsonPropertyName("price_amount")]
-        public string PriceAmount { get; set; }  // Изменено с decimal на string
+        public string PriceAmount { get; set; } = string.Empty;
 
         [JsonPropertyName("price_currency")]
-        public string PriceCurrency { get; set; }
+        public string PriceCurrency { get; set; } = string.Empty;
 
         [JsonPropertyName("pay_currency")]
-        public string PayCurrency { get; set; }
+        public string PayCurrency { get; set; } = string.Empty;
     }
 
     public class NowPaymentsCurrenciesResponse
     {
         [JsonPropertyName("currencies")]
-        public List<string> Currencies { get; set; }
+        public List<string> Currencies { get; set; } = new List<string>();
     }
 
     public class NowPaymentsWebhookEvent
     {
         [JsonPropertyName("event_type")]
-        public string EventType { get; set; }
+        public string EventType { get; set; } = string.Empty;
 
         [JsonPropertyName("order_id")]
-        public string OrderId { get; set; }
+        public string OrderId { get; set; } = string.Empty;
 
         [JsonPropertyName("payment_id")]
-        public string PaymentId { get; set; }
+        public string PaymentId { get; set; } = string.Empty;
 
         [JsonPropertyName("payment_status")]
-        public string PaymentStatus { get; set; }
+        public string PaymentStatus { get; set; } = string.Empty;
 
         [JsonPropertyName("pay_amount")]
         public decimal PayAmount { get; set; }
 
         [JsonPropertyName("pay_currency")]
-        public string PayCurrency { get; set; }
+        public string PayCurrency { get; set; } = string.Empty;
     }
 }

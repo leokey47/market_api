@@ -7,22 +7,22 @@ namespace market_api.Services
     public class UserService : IUserService
     {
         private readonly IUserRepository _userRepository;
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
 
-        public UserService(IUserRepository userRepository, AppDbContext context)
+        public UserService(IUserRepository userRepository, MongoDbContext context)
         {
             _userRepository = userRepository;
             _context = context;
         }
 
-        public User? GetUserById(int id)
+        public async Task<User?> GetUserByIdAsync(string id)
         {
-            return _userRepository.GetUserById(id);
+            return await _userRepository.GetUserByIdAsync(id);
         }
 
-        public bool UpdateUser(int id, string username, string email)
+        public async Task<bool> UpdateUserAsync(string id, string username, string email)
         {
-            var user = _context.Users.Find(id);
+            var user = await _userRepository.GetUserByIdAsync(id);
             if (user == null)
             {
                 return false;
@@ -31,8 +31,8 @@ namespace market_api.Services
             // Check if username is taken
             if (!string.IsNullOrEmpty(username) && username != user.Username)
             {
-                var existingUser = _context.Users.FirstOrDefault(u => u.Username == username);
-                if (existingUser != null)
+                var usernameExists = await _userRepository.UsernameExistsAsync(username, id);
+                if (usernameExists)
                 {
                     return false;
                 }
@@ -42,29 +42,46 @@ namespace market_api.Services
             // Check if email is taken
             if (!string.IsNullOrEmpty(email) && email != user.Email)
             {
-                var existingUser = _context.Users.FirstOrDefault(u => u.Email == email);
-                if (existingUser != null)
+                var emailExists = await _userRepository.EmailExistsAsync(email, id);
+                if (emailExists)
                 {
                     return false;
                 }
                 user.Email = email;
             }
 
-            _context.SaveChanges();
-            return true;
+            return await _userRepository.UpdateUserAsync(user);
         }
 
-        public bool UpdateAvatar(int id, string imageUrl)
+        public async Task<bool> UpdateAvatarAsync(string id, string imageUrl)
         {
-            var user = _context.Users.Find(id);
+            var user = await _userRepository.GetUserByIdAsync(id);
             if (user == null)
             {
                 return false;
             }
 
             user.ProfileImageUrl = imageUrl;
-            _context.SaveChanges();
-            return true;
+            return await _userRepository.UpdateUserAsync(user);
+        }
+
+        // Legacy methods for backward compatibility
+        public User? GetUserById(int id)
+        {
+            // This is a legacy method, you should use GetUserByIdAsync instead
+            throw new NotSupportedException("Use GetUserByIdAsync with string ID instead");
+        }
+
+        public bool UpdateUser(int id, string username, string email)
+        {
+            // This is a legacy method, you should use UpdateUserAsync instead
+            throw new NotSupportedException("Use UpdateUserAsync with string ID instead");
+        }
+
+        public bool UpdateAvatar(int id, string imageUrl)
+        {
+            // This is a legacy method, you should use UpdateAvatarAsync instead
+            throw new NotSupportedException("Use UpdateAvatarAsync with string ID instead");
         }
     }
 }

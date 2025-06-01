@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using System.Security.Claims;
 using market_api.Data;
 using market_api.Models;
@@ -12,9 +12,9 @@ namespace market_api.Controllers
     [Authorize]
     public class WishlistController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly MongoDbContext _context;
 
-        public WishlistController(AppDbContext context)
+        public WishlistController(MongoDbContext context)
         {
             _context = context;
         }
@@ -24,24 +24,34 @@ namespace market_api.Controllers
         public async Task<ActionResult<IEnumerable<WishlistItemResponse>>> GetWishlistItems()
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var wishlistItems = await _context.WishlistItems
-                .Include(w => w.Product)
-                .Where(w => w.UserId == userId)
+                .Find(w => w.UserId == userId)
                 .ToListAsync();
 
-            return wishlistItems.Select(item => new WishlistItemResponse
+            var response = new List<WishlistItemResponse>();
+
+            foreach (var item in wishlistItems)
             {
-                WishlistItemId = item.WishlistItemId,
-                ProductId = item.ProductId,
-                ProductName = item.Product.Name,
-                ProductDescription = item.Product.Description,
-                Price = item.Product.Price,
-                ProductImageUrl = item.Product.ImageUrl,
-                AddedAt = item.AddedAt
-            }).ToList();
+                var product = await _context.Products.Find(p => p.Id == item.ProductId).FirstOrDefaultAsync();
+                if (product != null)
+                {
+                    response.Add(new WishlistItemResponse
+                    {
+                        WishlistItemId = item.Id ?? string.Empty,
+                        ProductId = item.ProductId,
+                        ProductName = product.Name,
+                        ProductDescription = product.Description,
+                        Price = product.Price,
+                        ProductImageUrl = product.ImageUrl,
+                        AddedAt = item.AddedAt
+                    });
+                }
+            }
+
+            return response;
         }
 
         // POST: api/Wishlist
@@ -49,16 +59,16 @@ namespace market_api.Controllers
         public async Task<ActionResult<WishlistItem>> AddToWishlist(AddToWishlistRequest request)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
-            var product = await _context.Products.FindAsync(request.ProductId);
+            var product = await _context.Products.Find(p => p.Id == request.ProductId).FirstOrDefaultAsync();
             if (product == null)
                 return NotFound("Продукт не найден");
 
             // Check if product is already in wishlist
             var existingItem = await _context.WishlistItems
-                .Where(w => w.UserId == userId && w.ProductId == request.ProductId)
+                .Find(w => w.UserId == userId && w.ProductId == request.ProductId)
                 .FirstOrDefaultAsync();
 
             if (existingItem != null)
@@ -71,43 +81,41 @@ namespace market_api.Controllers
                 AddedAt = DateTime.UtcNow
             };
 
-            _context.WishlistItems.Add(wishlistItem);
-            await _context.SaveChangesAsync();
+            await _context.WishlistItems.InsertOneAsync(wishlistItem);
 
             return Ok(new { message = "Товар добавлен в список желаемого" });
         }
 
         // DELETE: api/Wishlist/5
         [HttpDelete("{id}")]
-        public async Task<IActionResult> RemoveFromWishlist(int id)
+        public async Task<IActionResult> RemoveFromWishlist(string id)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var wishlistItem = await _context.WishlistItems
-                .Where(w => w.WishlistItemId == id && w.UserId == userId)
+                .Find(w => w.Id == id && w.UserId == userId)
                 .FirstOrDefaultAsync();
 
             if (wishlistItem == null)
                 return NotFound("Товар не найден в списке желаемого");
 
-            _context.WishlistItems.Remove(wishlistItem);
-            await _context.SaveChangesAsync();
+            await _context.WishlistItems.DeleteOneAsync(w => w.Id == id);
 
             return Ok(new { message = "Товар удален из списка желаемого" });
         }
 
         // POST: api/Wishlist/MoveToCart/5
         [HttpPost("MoveToCart/{id}")]
-        public async Task<IActionResult> MoveToCart(int id)
+        public async Task<IActionResult> MoveToCart(string id)
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
             var wishlistItem = await _context.WishlistItems
-                .Where(w => w.WishlistItemId == id && w.UserId == userId)
+                .Find(w => w.Id == id && w.UserId == userId)
                 .FirstOrDefaultAsync();
 
             if (wishlistItem == null)
@@ -115,13 +123,13 @@ namespace market_api.Controllers
 
             // Check if product is already in cart
             var existingCartItem = await _context.CartItems
-                .Where(c => c.UserId == userId && c.ProductId == wishlistItem.ProductId)
+                .Find(c => c.UserId == userId && c.ProductId == wishlistItem.ProductId)
                 .FirstOrDefaultAsync();
 
             if (existingCartItem != null)
             {
                 existingCartItem.Quantity += 1;
-                _context.Entry(existingCartItem).State = EntityState.Modified;
+                await _context.CartItems.ReplaceOneAsync(c => c.Id == existingCartItem.Id, existingCartItem);
             }
             else
             {
@@ -132,12 +140,11 @@ namespace market_api.Controllers
                     Quantity = 1,
                     AddedAt = DateTime.UtcNow
                 };
-                _context.CartItems.Add(cartItem);
+                await _context.CartItems.InsertOneAsync(cartItem);
             }
 
             // Remove from wishlist
-            _context.WishlistItems.Remove(wishlistItem);
-            await _context.SaveChangesAsync();
+            await _context.WishlistItems.DeleteOneAsync(w => w.Id == id);
 
             return Ok(new { message = "Товар перемещен в корзину" });
         }
@@ -147,42 +154,34 @@ namespace market_api.Controllers
         public async Task<IActionResult> ClearWishlist()
         {
             var userId = GetCurrentUserId();
-            if (userId == 0)
+            if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
 
-            var wishlistItems = await _context.WishlistItems
-                .Where(w => w.UserId == userId)
-                .ToListAsync();
-
-            _context.WishlistItems.RemoveRange(wishlistItems);
-            await _context.SaveChangesAsync();
+            await _context.WishlistItems.DeleteManyAsync(w => w.UserId == userId);
 
             return Ok(new { message = "Список желаемого очищен" });
         }
 
-        private int GetCurrentUserId()
+        private string GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst("userId");
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                return 0;
-
-            return userId;
+            return userIdClaim?.Value ?? string.Empty;
         }
     }
 
     public class WishlistItemResponse
     {
-        public int WishlistItemId { get; set; }
-        public int ProductId { get; set; }
-        public string ProductName { get; set; }
-        public string ProductDescription { get; set; }
-        public string ProductImageUrl { get; set; }
+        public string WishlistItemId { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public string ProductDescription { get; set; } = string.Empty;
+        public string ProductImageUrl { get; set; } = string.Empty;
         public decimal Price { get; set; }
         public DateTime AddedAt { get; set; }
     }
 
     public class AddToWishlistRequest
     {
-        public int ProductId { get; set; }
+        public string ProductId { get; set; } = string.Empty;
     }
 }

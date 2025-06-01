@@ -1,26 +1,20 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Security.Cryptography;
-using System.Linq;
-using System;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using market_api.Data;
 using market_api.Models;
 using market_api.Repositories;
 using market_api.Services;
-using market_api.Controllers;
 using CloudinaryDotNet;
-using Microsoft.Extensions.Options;
 using Microsoft.OpenApi.Models;
-using System.Collections.Generic;
+using MongoDB.Driver;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Register DatabaseContext in DI
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+// Register MongoDB Context
+builder.Services.AddSingleton<MongoDbContext>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -29,6 +23,13 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddHttpClient("NOWPayments", client =>
 {
     client.BaseAddress = new Uri("https://api.nowpayments.io/v1/");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+
+// Register HttpClient for NovaPoshta
+builder.Services.AddHttpClient("NovaPoshta", client =>
+{
+    client.BaseAddress = new Uri("https://api.novaposhta.ua/v2.0/json/");
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 
@@ -104,17 +105,15 @@ builder.Services.AddAuthentication(options =>
 });
 
 var cloudinarySettings = builder.Configuration.GetSection("Cloudinary").Get<CloudinarySettings>();
-var cloudinary = new Cloudinary(new Account(
-    cloudinarySettings.CloudName,
-    cloudinarySettings.ApiKey,
-    cloudinarySettings.ApiSecret
-));
-builder.Services.AddHttpClient("NovaPoshta", client =>
+if (cloudinarySettings != null)
 {
-    client.BaseAddress = new Uri("https://api.novaposhta.ua/v2.0/json/");
-    client.DefaultRequestHeaders.Add("Accept", "application/json");
-});
-builder.Services.AddSingleton(cloudinary);
+    var cloudinary = new Cloudinary(new Account(
+        cloudinarySettings.CloudName,
+        cloudinarySettings.ApiKey,
+        cloudinarySettings.ApiSecret
+    ));
+    builder.Services.AddSingleton(cloudinary);
+}
 
 // Add Authorization
 builder.Services.AddAuthorization();
@@ -127,10 +126,12 @@ app.UseCors("AllowAll");
 // Add admin user on startup
 using (var scope = app.Services.CreateScope())
 {
-    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    context.Database.EnsureCreated();
+    var context = scope.ServiceProvider.GetRequiredService<MongoDbContext>();
 
-    if (!context.Users.Any(u => u.Role == "admin"))
+    // Check if admin user exists
+    var adminExists = await context.Users.Find(u => u.Role == "admin").FirstOrDefaultAsync();
+
+    if (adminExists == null)
     {
         var admin = new User
         {
@@ -141,8 +142,7 @@ using (var scope = app.Services.CreateScope())
             CreatedAt = DateTime.UtcNow,
         };
 
-        context.Users.Add(admin);
-        context.SaveChanges();
+        await context.Users.InsertOneAsync(admin);
     }
 }
 
