@@ -36,6 +36,64 @@ namespace market_api.Controllers
             _logger = logger;
         }
 
+        // GET: api/Payment/currencies
+        [HttpGet("currencies")]
+        public async Task<ActionResult<List<string>>> GetAvailableCurrencies()
+        {
+            try
+            {
+                var apiKey = _configuration["NOWPayments:ApiKey"];
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    _logger.LogWarning("NOWPayments API key is missing, returning fallback currencies");
+                    // Возвращаем fallback валюты если API ключ отсутствует
+                    var fallbackCurrencies = new List<string>
+                    {
+                        "BTC", "ETH", "LTC", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
+                        "BNB", "SOL", "AVAX", "LINK", "UNI", "TRX", "XLM", "VET", "FIL", "THETA"
+                    };
+                    return Ok(fallbackCurrencies);
+                }
+
+                _httpClient.DefaultRequestHeaders.Clear();
+                _httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
+
+                var response = await _httpClient.GetAsync("https://api.nowpayments.io/v1/currencies");
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var content = await response.Content.ReadAsStringAsync();
+                    var currenciesResponse = JsonSerializer.Deserialize<NowPaymentsCurrenciesResponse>(content);
+
+                    if (currenciesResponse?.Currencies != null && currenciesResponse.Currencies.Any())
+                    {
+                        return Ok(currenciesResponse.Currencies);
+                    }
+                }
+
+                _logger.LogWarning("Failed to fetch currencies from NOWPayments API, returning fallback");
+                // Fallback валюты если API не работает
+                var defaultCurrencies = new List<string>
+                {
+                    "BTC", "ETH", "TON", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
+                    
+                };
+                return Ok(defaultCurrencies);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error while getting available currencies");
+
+                // Возвращаем fallback валюты при любой ошибке
+                var fallbackCurrencies = new List<string>
+                {
+                    "BTC", "ETH", "TON", "USDT", "USDC", "XRP", "DOGE", "ADA", "DOT", "MATIC",
+                    
+                };
+                return Ok(fallbackCurrencies);
+            }
+        }
+
         // POST: api/Payment/create
         [HttpPost("create")]
         public async Task<ActionResult<PaymentResponse>> CreatePayment([FromBody] CreatePaymentRequest request)
