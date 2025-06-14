@@ -61,6 +61,63 @@ namespace market_api.Controllers
             }
         }
 
+        // DELETE: api/Business/remove/{userId} - НОВЫЙ ЭНДПОИНТ
+        [HttpDelete("remove/{userId}")]
+        public async Task<IActionResult> RemoveBusinessAccount(string userId)
+        {
+            // Проверяем, что пользователь может изменять этот аккаунт
+            var currentUserId = GetCurrentUserId();
+            var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+            if (currentUserId != userId && userRole != "admin")
+            {
+                return Forbid();
+            }
+
+            var user = await _context.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return NotFound(new { message = "User not found" });
+            }
+
+            // Проверяем, является ли пользователь бизнес-аккаунтом
+            if (!user.IsBusiness)
+            {
+                return BadRequest(new { message = "User is not a business account" });
+            }
+
+            // Удаляем бизнес-статус
+            user.IsBusiness = false;
+            user.CompanyName = null;
+            user.CompanyAvatar = null;
+            user.CompanyDescription = null;
+
+            try
+            {
+                await _context.Users.ReplaceOneAsync(u => u.Id == userId, user);
+
+                // Опционально: делаем продукты этого бизнес-аккаунта общими
+                var businessProducts = await _context.Products
+                    .Find(p => p.BusinessOwnerId == userId)
+                    .ToListAsync();
+
+                if (businessProducts.Any())
+                {
+                    foreach (var product in businessProducts)
+                    {
+                        product.BusinessOwnerId = null; // Делаем продукты общими
+                        await _context.Products.ReplaceOneAsync(p => p.Id == product.Id, product);
+                    }
+                }
+
+                return Ok(new { message = "Business status removed successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error removing business status", error = ex.Message });
+            }
+        }
+
         // PUT: api/Business/update/{userId}
         [HttpPut("update/{userId}")]
         public async Task<IActionResult> UpdateBusinessAccount(string userId, [FromBody] UpdateBusinessAccountRequest request)

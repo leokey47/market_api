@@ -40,6 +40,37 @@ public class UserController : ControllerBase
         return Ok(user);
     }
 
+    // GET: api/User/all
+    [HttpGet("all")]
+    [Authorize(Roles = "admin")]
+    public async Task<ActionResult<IEnumerable<object>>> GetAllUsers()
+    {
+        try
+        {
+            var users = await _context.Users.Find(_ => true).ToListAsync();
+
+            var userResponses = users.Select(user => new
+            {
+                user.Id,
+                user.Username,
+                user.Email,
+                user.Role,
+                user.CreatedAt,
+                user.ProfileImageUrl,
+                user.IsBusiness,
+                user.CompanyName,
+                user.CompanyAvatar,
+                user.CompanyDescription
+            }).ToList();
+
+            return Ok(userResponses);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error retrieving users", error = ex.Message });
+        }
+    }
+
     [HttpPut("{id}")]
     [Authorize]
     public async Task<IActionResult> UpdateUser(string id, [FromBody] UpdateUserModel model)
@@ -88,9 +119,59 @@ public class UserController : ControllerBase
             user.Email = model.Email;
         }
 
+        // Admins can update roles
+        if (userRole == "admin" && !string.IsNullOrEmpty(model.Role))
+        {
+            user.Role = model.Role;
+        }
+
         await _context.Users.ReplaceOneAsync(u => u.Id == id, user);
 
         return Ok(new { message = "User updated successfully" });
+    }
+
+    // DELETE: api/User/{id}
+    [HttpDelete("{id}")]
+    [Authorize(Roles = "admin")]
+    public async Task<IActionResult> DeleteUser(string id)
+    {
+        try
+        {
+            var user = await _context.Users.Find(u => u.Id == id).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return NotFound(new { message = "User not found" });
+            }
+
+            // Prevent deletion of admin users
+            if (user.Role == "admin")
+            {
+                return BadRequest(new { message = "Cannot delete admin users" });
+            }
+
+            // Clean up related data
+            await _context.CartItems.DeleteManyAsync(c => c.UserId == id);
+            await _context.WishlistItems.DeleteManyAsync(w => w.UserId == id);
+            await _context.Reviews.DeleteManyAsync(r => r.UserId == id);
+            await _context.ExternalLogins.DeleteManyAsync(el => el.UserId == id);
+
+            // Handle orders - don't delete them, just mark as orphaned
+            var userOrders = await _context.Orders.Find(o => o.UserId == id).ToListAsync();
+            foreach (var order in userOrders)
+            {
+                order.UserId = "deleted_user"; // Mark as deleted user
+                await _context.Orders.ReplaceOneAsync(o => o.Id == order.Id, order);
+            }
+
+            // Delete the user
+            await _context.Users.DeleteOneAsync(u => u.Id == id);
+
+            return Ok(new { message = "User deleted successfully" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error deleting user", error = ex.Message });
+        }
     }
 
     [HttpPut("{id}/avatar")]
@@ -123,7 +204,7 @@ public class UserController : ControllerBase
         return Ok(new { message = "Avatar updated successfully" });
     }
 
-    // PUT: api/User/{id}/business-info - изменен маршрут для избежания конфликта
+    // PUT: api/User/{id}/business-info
     [HttpPut("{id}/business-info")]
     [Authorize]
     public async Task<IActionResult> UpdateBusinessInfo(string id, [FromBody] UpdateBusinessInfoModel model)
@@ -156,10 +237,6 @@ public class UserController : ControllerBase
         return Ok(new { message = "Business info updated successfully" });
     }
 
-    // Удален дублирующий метод CreateBusinessAccount - теперь он только в BusinessController
-
-    // Удален дублирующий метод GetBusinessProducts - теперь он только в BusinessController
-
     private string GetCurrentUserId()
     {
         var userIdClaim = User.FindFirst("userId");
@@ -178,6 +255,7 @@ public class UpdateUserModel
 {
     public string Username { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
 }
 
 public class UpdateAvatarModel
