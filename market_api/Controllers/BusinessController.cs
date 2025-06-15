@@ -61,7 +61,7 @@ namespace market_api.Controllers
             }
         }
 
-        // DELETE: api/Business/remove/{userId} - НОВЫЙ ЭНДПОИНТ
+        // DELETE: api/Business/remove/{userId} - ОБНОВЛЕННЫЙ ЭНДПОИНТ
         [HttpDelete("remove/{userId}")]
         public async Task<IActionResult> RemoveBusinessAccount(string userId)
         {
@@ -86,35 +86,90 @@ namespace market_api.Controllers
                 return BadRequest(new { message = "User is not a business account" });
             }
 
-            // Удаляем бизнес-статус
-            user.IsBusiness = false;
-            user.CompanyName = null;
-            user.CompanyAvatar = null;
-            user.CompanyDescription = null;
-
             try
             {
-                await _context.Users.ReplaceOneAsync(u => u.Id == userId, user);
-
-                // Опционально: делаем продукты этого бизнес-аккаунта общими
+                // Получаем все товары этого бизнес-аккаунта
                 var businessProducts = await _context.Products
                     .Find(p => p.BusinessOwnerId == userId)
                     .ToListAsync();
 
-                if (businessProducts.Any())
+                // Удаляем все связанные данные для каждого товара
+                foreach (var product in businessProducts)
                 {
-                    foreach (var product in businessProducts)
+                    var productId = product.Id!;
+
+                    // Находим все заказы, содержащие этот товар
+                    var orderItems = await _context.OrderItems
+                        .Find(oi => oi.ProductId == productId)
+                        .ToListAsync();
+
+                    if (orderItems.Any())
                     {
-                        product.BusinessOwnerId = null; // Делаем продукты общими
-                        await _context.Products.ReplaceOneAsync(p => p.Id == product.Id, product);
+                        // Получаем все затронутые заказы
+                        var orderIds = orderItems.Select(oi => oi.OrderId).Distinct().ToList();
+
+                        // Удаляем элементы заказов для этого товара
+                        await _context.OrderItems.DeleteManyAsync(oi => oi.ProductId == productId);
+
+                        // Проверяем каждый заказ на наличие оставшихся элементов
+                        foreach (var orderId in orderIds)
+                        {
+                            var remainingItems = await _context.OrderItems
+                                .Find(oi => oi.OrderId == orderId)
+                                .FirstOrDefaultAsync();
+
+                            // Если в заказе не осталось товаров, удаляем заказ
+                            if (remainingItems == null)
+                            {
+                                // Удаляем связанные доставки
+                                await _context.Deliveries.DeleteManyAsync(d => d.OrderId == orderId);
+
+                                // Удаляем сам заказ
+                                await _context.Orders.DeleteOneAsync(o => o.Id == orderId);
+                            }
+                        }
                     }
+
+                    // Удаляем товары из корзин пользователей
+                    await _context.CartItems.DeleteManyAsync(ci => ci.ProductId == productId);
+
+                    // Удаляем товары из списков желаемого
+                    await _context.WishlistItems.DeleteManyAsync(wi => wi.ProductId == productId);
+
+                    // Удаляем отзывы на этот товар
+                    await _context.Reviews.DeleteManyAsync(r => r.ProductId == productId);
+
+                    // Удаляем фотографии товара
+                    await _context.ProductPhotos.DeleteManyAsync(pp => pp.ProductId == productId);
+
+                    // Удаляем спецификации товара
+                    await _context.ProductSpecifications.DeleteManyAsync(ps => ps.ProductId == productId);
+
+                    // Удаляем сам товар
+                    await _context.Products.DeleteOneAsync(p => p.Id == productId);
                 }
 
-                return Ok(new { message = "Business status removed successfully" });
+                // Удаляем бизнес-статус пользователя
+                user.IsBusiness = false;
+                user.CompanyName = null;
+                user.CompanyAvatar = null;
+                user.CompanyDescription = null;
+
+                await _context.Users.ReplaceOneAsync(u => u.Id == userId, user);
+
+                return Ok(new
+                {
+                    message = "Business status removed successfully",
+                    deletedProducts = businessProducts.Count
+                });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "Error removing business status", error = ex.Message });
+                return StatusCode(500, new
+                {
+                    message = "Error removing business status",
+                    error = ex.Message
+                });
             }
         }
 
